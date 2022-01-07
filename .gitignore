@@ -1,0 +1,4 @@
+*-protocol.h
+.vscode
+zig-cache
+zig-out

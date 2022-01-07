@@ -1,0 +1,307 @@
+{
+    "tap_to_click": true,
+    "natural_scrolling": true,
+    "background_color": [0.3, 0.3, 0.3, 1.0],
+    "border_color": [0.5, 0.5, 0.5, 1.0],
+    "focused_color": [0.28, 0.78, 1.0, 1.0],
+    "grabbed_color": [1.0, 0.6, 0.7, 1.0],
+    "active_border_width": 3,
+    "autostart": ["kanshi", "waybar"],
+    "move_pixels": 20,
+    "grow_pixels": 10,
+    "damage_tracking": "partial",
+    "mouse_move_modifiers": ["logo"],
+    "mouse_move_button": "left",
+    "mouse_grow_modifiers": ["logo", "shift"],
+    "mouse_grow_button": "left",
+      "hotkeys": [
+        {
+            "modifiers": ["ctrl", "shift", "alt"],
+            "key": "R",
+            "action": "reload_config",
+            "arg": ""
+        },
+        {
+            "modifiers": ["logo", "shift"],
+            "key": "Up",
+            "action": "grow_toplevel",
+            "arg": "up"
+        },
+        {
+            "modifiers": ["logo", "shift"],
+            "key": "Down",
+            "action": "grow_toplevel",
+            "arg": "down"
+        },
+        {
+            "modifiers": ["logo", "shift"],
+            "key": "Left",
+            "action": "grow_toplevel",
+            "arg": "left"
+        },
+        {
+            "modifiers": ["logo", "shift"],
+            "key": "Right",
+            "action": "grow_toplevel",
+            "arg": "right"
+        },
+        {
+            "modifiers": ["logo", "ctrl"],
+            "key": "Up",
+            "action": "move_toplevel",
+            "arg": "up"
+        },
+        {
+            "modifiers": ["logo", "ctrl"],
+            "key": "Down",
+            "action": "move_toplevel",
+            "arg": "down"
+        },
+        {
+            "modifiers": ["logo", "ctrl"],
+            "key": "Left",
+            "action": "move_toplevel",
+            "arg": "left"
+        },
+        {
+            "modifiers": ["logo", "ctrl"],
+            "key": "Right",
+            "action": "move_toplevel",
+            "arg": "right"
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "space",
+            "action": "command",
+            "arg": "bemenu-run"
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "t",
+            "action": "command",
+            "arg": "alacritty"
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "Up",
+            "action": "toplevel_to_front",
+            "arg": "" 
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "Down",
+            "action": "toplevel_to_back",
+            "arg": "" 
+        },
+        {
+            "modifiers": ["alt"],
+            "key": "Tab",
+            "action": "cycle_groups",
+            "arg": "1"
+        },
+        {
+            "modifiers": ["alt", "shift"],
+            "key": "ISO_Left_Tab",
+            "action": "cycle_groups",
+            "arg": "-1"
+        },
+        {
+            "modifiers": ["alt"],
+            "key": "grave",
+            "action": "cycle_toplevels",
+            "arg": "1"
+        },
+        {
+            "modifiers": ["alt", "shift"],
+            "key": "asciitilde",
+            "action": "cycle_toplevels",
+            "arg": "-1"
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "e",
+            "action": "command",
+            "arg": "kate" 
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "w",
+            "action": "command",
+            "arg": "firefox" 
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "c",
+            "action": "command",
+            "arg": "code" 
+        },
+        {
+            "modifiers": ["alt", "shift"],
+            "key": "dollar", 
+            "action": "command",
+            "arg": "grim -g \"$(slurp)\"" 
+        },
+        {
+            "modifiers": ["alt", "shift"],
+            "key": "F",
+            "action": "command",
+            "arg": "killall -SIGUSR1 waybar" 
+        },
+        {
+            "modifiers": ["logo", "shift"],
+            "key": "Z",
+            "action": "command",
+            "arg": "makoctl dismiss" 
+        },
+        {
+            "modifiers": ["logo", "shift"],
+            "key": "X",
+            "action": "command",
+            "arg": "makoctl dismiss -a" 
+        },
+        {
+            "modifiers": ["logo", "shift"],
+            "key": "A",
+            "action": "command",
+            "arg": "makoctl invoke" 
+        },
+        {
+            "modifiers": ["logo", "ctrl"],
+            "key": "s",
+            "action": "command",
+            "arg": "swaylock -f -c 000000 && systemctl suspend" 
+        },
+        {
+            "modifiers": ["logo", "shift"],
+            "key": "L",
+            "action": "command",
+            "arg": "swaylock -c 000000"
+        },
+        {
+            "modifiers": [],
+            "key": "XF86AudioRaiseVolume",
+            "action": "command",
+            "arg": "amixer -M set Master 2%+" 
+        },
+        {
+            "modifiers": [],
+            "key": "XF86AudioLowerVolume",
+            "action": "command",
+            "arg": "amixer -M set Master 2%-" 
+        },
+        {
+            "modifiers": [],
+            "key": "XF86AudioMute",
+            "action": "command",
+            "arg": "amixer -M set Master toggle" 
+        },
+        {
+            "modifiers": [],
+            "key": "XF86MonBrightnessUp",
+            "action": "command",
+            "arg": "brightnessctl s 5%+" 
+        },
+        {
+            "modifiers": [],
+            "key": "XF86MonBrightnessDown",
+            "action": "command",
+            "arg": "brightnessctl s 5%-" 
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "f",
+            "action": "toggle_fullscreen",
+            "arg": "" 
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "F1",
+            "action": "switch_to_workspace",
+            "arg": "1" 
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "F2",
+            "action": "switch_to_workspace",
+            "arg": "2" 
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "F3",
+            "action": "switch_to_workspace",
+            "arg": "3" 
+        },
+        {
+            "modifiers": ["logo"],
+            "key": "F4",
+            "action": "switch_to_workspace",
+            "arg": "4" 
+        },
+        {
+            "modifiers": ["logo", "alt"],
+            "key": "F1",
+            "action": "toplevel_to_workspace",
+            "arg": "1" 
+        },
+        {
+            "modifiers": ["logo", "alt"],
+            "key": "F2",
+            "action": "toplevel_to_workspace",
+            "arg": "2" 
+        },
+        {
+            "modifiers": ["logo", "alt"],
+            "key": "F3",
+            "action": "toplevel_to_workspace",
+            "arg": "3" 
+        },
+        {
+            "modifiers": ["logo", "alt"],
+            "key": "F4",
+            "action": "toplevel_to_workspace",
+            "arg": "4" 
+        },
+        {
+            "modifiers": ["ctrl", "alt", "shift"],
+            "key": "Q",
+            "action": "quit",
+            "arg": ""
+        },
+        {
+            "modifiers": ["ctrl", "alt"],
+            "key": "BackSpace",
+            "action": "quit",
+            "arg": ""
+        },
+        {
+            "modifiers": ["ctrl", "alt"],
+            "key": "XF86Switch_VT_1",
+            "action": "chvt",
+            "arg": "1" 
+        },
+        {
+            "modifiers": ["ctrl", "alt"],
+            "key": "XF86Switch_VT_2",
+            "action": "chvt",
+            "arg": "2" 
+        },
+        {
+            "modifiers": ["ctrl", "alt"],
+            "key": "XF86Switch_VT_3",
+            "action": "chvt",
+            "arg": "3" 
+        },
+        {
+            "modifiers": ["ctrl", "alt"],
+            "key": "XF86Switch_VT_4",
+            "action": "chvt",
+            "arg": "4" 
+        },
+        {
+            "modifiers": ["ctrl", "alt"],
+            "key": "XF86Switch_VT_5",
+            "action": "chvt",
+            "arg": "5" 
+        }
+    ]
+}
