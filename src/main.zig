@@ -71,8 +71,10 @@ const Surface = struct {
         self.has_border = false;
         self.ancestor = ancestor;
         self.output_box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+        var output_box: wlr.wlr_box = undefined;
         if (self.server.outputAtCursor()) |output| {
             self.workspace = output.active_workspace;
+            output.getBox(&output_box);
         }
         self.is_actual_fullscreen = false;
 
@@ -108,15 +110,13 @@ const Surface = struct {
                         );
                     },
                     wlr.WLR_XDG_SURFACE_ROLE_POPUP => {
-                        if (self.server.outputAtCursor()) |output| {
-                            wlr.wlr_xdg_popup_unconstrain_from_box(
-                                @ptrCast(
-                                    *wlr.wlr_xdg_popup,
-                                    @field(typed_surface, wlr_xdg_surface_union).popup,
-                                ),
-                                &output.total_box,
-                            );
-                        }
+                        wlr.wlr_xdg_popup_unconstrain_from_box(
+                            @ptrCast(
+                                *wlr.wlr_xdg_popup,
+                                @field(typed_surface, wlr_xdg_surface_union).popup,
+                            ),
+                            &output_box,
+                        );
                     },
                     else => {},
                 }
@@ -219,8 +219,8 @@ const Surface = struct {
             else => {},
         }
 
-        self.damage(if (self.server.config.damage_tracking == .full) false else true);
         self.updateBorders();
+        self.damage(if (self.server.config.damage_tracking == .full) false else true);
     }
 
     fn onMap(self: *Surface, _: void) !void {
@@ -228,29 +228,23 @@ const Surface = struct {
         self.initWlrSurface();
 
         var should_focus = true;
-        self.updateBorders();
-
-        if (self.list) |list| {
-            var should_place = true;
-            switch (self.typed_surface) {
-                .xwayland => |xwayland| {
-                    self.output_box.x = xwayland.x;
-                    self.output_box.y = xwayland.y;
-                    if (xwayland.override_redirect) {
-                        should_place = false;
-                        should_focus = wlr.wlr_xwayland_or_surface_wants_focus(xwayland);
-                    }
-                },
-                else => {},
-            }
-            if (should_place) self.place();
-
-            list.prepend(&self.node);
+        if (self.has_border) self.place();
+        switch (self.typed_surface) {
+            .xwayland => |xwayland| {
+                self.output_box.x = xwayland.x;
+                self.output_box.y = xwayland.y;
+                if (xwayland.override_redirect) {
+                    should_focus = wlr.wlr_xwayland_or_surface_wants_focus(xwayland);
+                }
+            },
+            else => {},
         }
+        if (self.list) |list| list.prepend(&self.node);
 
         if (self.wlr_surface) |wlr_surface| {
             if (should_focus) self.server.setKeyboardFocus(wlr_surface);
         }
+        self.updateOutputs();
         self.server.damageAllOutputs();
     }
 
@@ -385,17 +379,15 @@ const Surface = struct {
     }
 
     fn initWlrSurface(self: *Surface) void {
-        if (self.wlr_surface) |_| {
-            return;
-        }
+        if (self.wlr_surface != null) return;
 
-        switch (self.typed_surface) {
-            .xdg => |xdg| self.wlr_surface = xdg.surface,
-            .xwayland => |xwayland| self.wlr_surface = xwayland.surface,
-            .layer => |layer_surface| self.wlr_surface = layer_surface.surface,
-            .subsurface => |subsurface| self.wlr_surface = subsurface.surface,
-            .drag_icon => |drag_icon| self.wlr_surface = drag_icon.surface,
-        }
+        self.wlr_surface = switch (self.typed_surface) {
+            .xdg => |xdg| xdg.surface,
+            .xwayland => |xwayland| xwayland.surface,
+            .layer => |layer_surface| layer_surface.surface,
+            .subsurface => |subsurface| subsurface.surface,
+            .drag_icon => |drag_icon| drag_icon.surface,
+        };
 
         if (self.wlr_surface) |wlr_surface| {
             wlr_surface.data = self;
@@ -479,6 +471,8 @@ const Surface = struct {
             },
             else => {},
         }
+
+        self.updateOutputs();
         self.updateBorders();
         self.server.damageAllOutputs();
     }
@@ -502,6 +496,10 @@ const Surface = struct {
         }
         box.x += self.output_box.x;
         box.y += self.output_box.y;
+        if (self.wlr_surface) |wlr_surface| {
+            box.x += wlr_surface.sx;
+            box.y += wlr_surface.sy;
+        }
     }
 
     fn adjustBoundsFromPopup(xdg_popup: *wlr.wlr_xdg_popup, parent_box: *wlr.wlr_box) void {
@@ -556,52 +554,83 @@ const Surface = struct {
         }
     }
 
+    fn getLayoutBox(self: *Surface, box: *wlr.wlr_box) void {
+        if (self.wlr_surface) |wlr_surface| {
+            var parent_box: wlr.wlr_box = undefined;
+            self.getParentBox(&parent_box);
+            box.width = wlr_surface.current.width;
+            box.height = wlr_surface.current.height;
+            box.x = parent_box.x + wlr_surface.sx;
+            box.y = parent_box.y + wlr_surface.sy;
+        }
+    }
+
+    const UpdateOutput = struct {
+        wlr_output: *wlr.wlr_output,
+        enter: bool,
+    };
+
+    fn updateOutputIter(
+        surf: [*c]wlr.wlr_surface,
+        _: i32,
+        _: i32,
+        data: ?*anyopaque,
+    ) callconv(.C) void {
+        const uo = @ptrCast(*UpdateOutput, @alignCast(@alignOf(*UpdateOutput), data));
+        const wlr_surface = @ptrCast(*wlr.wlr_surface, surf);
+
+        if (uo.enter) {
+            wlr.wlr_surface_send_enter(wlr_surface, uo.wlr_output);
+        } else {
+            wlr.wlr_surface_send_leave(wlr_surface, uo.wlr_output);
+        }
+    }
+
+    fn updateOutputs(self: *Surface) void {
+        var box: wlr.wlr_box = undefined;
+        self.getLayoutBox(&box);
+        var iter = self.server.outputs.first;
+        while (iter) |node| : (iter = node.next) {
+            var output_box: wlr.wlr_box = undefined;
+            node.data.getBox(&output_box);
+            var intersection: wlr.wlr_box = undefined;
+            var uo = UpdateOutput{
+                .wlr_output = node.data.wlr_output,
+                .enter = wlr.wlr_box_intersection(&intersection, &output_box, &box),
+            };
+            self.forEachSurface(updateOutputIter, &uo, false);
+            self.forEachSurface(updateOutputIter, &uo, true);
+        }
+    }
+
     fn damage(self: *Surface, whole: bool) void {
         if (self.server.config.damage_tracking == .minimal) {
             self.server.damageAllOutputs();
             return;
         }
 
-        if (self.wlr_surface) |wlr_surface| {
-            var iter = self.server.outputs.first;
-            while (iter) |node| : (iter = node.next) {
-                const layout = @ptrCast(
-                    *wlr.wlr_output_layout_output,
-                    wlr.wlr_output_layout_get(
-                        self.server.wlr_output_layout,
-                        node.data.wlr_output,
-                    ),
-                );
-                var parent_box: wlr.wlr_box = undefined;
-                self.getParentBox(&parent_box);
+        var box: wlr.wlr_box = undefined;
+        self.getLayoutBox(&box);
+        var iter = self.server.outputs.first;
+        while (iter) |node| : (iter = node.next) {
+            const layout = node.data.getLayout();
+            var intersection: wlr.wlr_box = undefined;
+            var output_box: wlr.wlr_box = undefined;
+            node.data.getBox(&output_box);
+
+            if (wlr.wlr_box_intersection(&intersection, &output_box, &box)) {
                 var ddata = DamageData{
                     .output = node.data,
                     .whole = whole,
                     .box = wlr.wlr_box{
-                        .width = wlr_surface.current.width,
-                        .height = wlr_surface.current.height,
-                        .x = parent_box.x + wlr_surface.sx,
-                        .y = parent_box.y + wlr_surface.sy,
+                        .width = box.width,
+                        .height = box.height,
+                        .x = box.x - layout.x,
+                        .y = box.y - layout.y,
                     },
                 };
-                var output_box = wlr.wlr_box{
-                    .x = layout.x,
-                    .y = layout.y,
-                    .width = 0,
-                    .height = 0,
-                };
-                wlr.wlr_output_effective_resolution(
-                    node.data.wlr_output,
-                    &output_box.width,
-                    &output_box.height,
-                );
-                var intersection: wlr.wlr_box = undefined;
-                if (wlr.wlr_box_intersection(&intersection, &output_box, &ddata.box)) {
-                    ddata.box.x -= layout.x;
-                    ddata.box.y -= layout.y;
 
-                    self.forEachSurface(damageIter, &ddata, false);
-                }
+                self.forEachSurface(damageIter, &ddata, false);
             }
         }
     }
@@ -645,15 +674,14 @@ const Surface = struct {
         if (ddata.whole) {
             wlr.wlr_output_damage_add_box(ddata.output.damage, &box);
         }
+
+        if (wlr.wl_list_empty(&wlr_surface.current.frame_callback_list) == 0) {
+            wlr.wlr_output_schedule_frame(ddata.output.wlr_output);
+        }
     }
     fn forEachSurface(
         self: *Surface,
-        cb: fn (
-            [*c]wlr.wlr_surface,
-            i32,
-            i32,
-            ?*anyopaque,
-        ) callconv(.C) void,
+        cb: fn ([*c]wlr.wlr_surface, i32, i32, ?*anyopaque) callconv(.C) void,
         data: *anyopaque,
         popups: bool,
     ) void {
@@ -804,8 +832,10 @@ const Surface = struct {
     fn getToplevel(self: *Surface) ?*Surface {
         if (self.has_border) {
             return self;
+        } else if (self.ancestor) |ancestor| {
+            return ancestor.getToplevel();
         } else {
-            return self.ancestor;
+            return null;
         }
     }
 
@@ -862,36 +892,44 @@ const Surface = struct {
     }
 
     fn place(self: *Surface) void {
-        var parent_x: i32 = 0;
-        var parent_y: i32 = 0;
-        var parent_width: i32 = 0;
-        var parent_height: i32 = 0;
+        var parent_box = wlr.wlr_box{ .x = 0, .y = 0, .width = 0, .height = 0 };
         var box: wlr.wlr_box = undefined;
         self.getGeometry(&box);
 
-        if (self.ancestor) |ancestor| {
-            var ancestor_box: wlr.wlr_box = undefined;
-            ancestor.getGeometry(&ancestor_box);
-            parent_x = ancestor_box.x;
-            parent_y = ancestor_box.y;
-            parent_width = ancestor_box.width;
-            parent_height = ancestor_box.height;
-        } else if (self.server.outputAtCursor()) |output| {
-            const layout = @ptrCast(
-                *wlr.wlr_output_layout_output,
-                wlr.wlr_output_layout_get(self.server.wlr_output_layout, output.wlr_output),
-            );
-            wlr.wlr_output_effective_resolution(
-                output.wlr_output,
-                &parent_width,
-                &parent_height,
-            );
-            parent_x = layout.x;
-            parent_y = layout.y;
+        switch (self.typed_surface) {
+            .xdg => |xdg| {
+                if (xdg.role == wlr.WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
+                    if (@ptrCast(?*wlr.wlr_xdg_surface, @ptrCast(
+                        *wlr.wlr_xdg_toplevel,
+                        @field(xdg, wlr_xdg_surface_union).toplevel,
+                    ).parent)) |parent_xdg| {
+                        if (Surface.fromWlrSurface(parent_xdg.surface)) |parent| {
+                            parent.getGeometry(&parent_box);
+                        }
+                    }
+                }
+            },
+            else => {},
         }
 
-        box.x = parent_x + @divFloor(parent_width, 2) - @divFloor(box.width, 2);
-        box.y = parent_y + @divFloor(parent_height, 2) - @divFloor(box.height, 2);
+        if (parent_box.width == 0) {
+            if (self.server.outputAtCursor()) |output| {
+                const layout = @ptrCast(
+                    *wlr.wlr_output_layout_output,
+                    wlr.wlr_output_layout_get(self.server.wlr_output_layout, output.wlr_output),
+                );
+                wlr.wlr_output_effective_resolution(
+                    output.wlr_output,
+                    &parent_box.width,
+                    &parent_box.height,
+                );
+                parent_box.x = layout.x;
+                parent_box.y = layout.y;
+            }
+        }
+
+        box.x = parent_box.x + @divFloor(parent_box.width, 2) - @divFloor(box.width, 2);
+        box.y = parent_box.y + @divFloor(parent_box.height, 2) - @divFloor(box.height, 2);
         self.setGeometry(box);
     }
 
@@ -902,13 +940,13 @@ const Surface = struct {
         popups: bool,
         render_fullscreen: bool,
     ) bool {
+        var rendered_any = false;
+
         switch (self.typed_surface) {
             .layer => {
                 rdata.x = self.output_box.x;
                 rdata.y = self.output_box.y;
-                self.forEachSurface(renderIter, rdata, popups);
-
-                return true;
+                rendered_any = true;
             },
             .xwayland, .xdg => {
                 var box: wlr.wlr_box = undefined;
@@ -924,8 +962,7 @@ const Surface = struct {
                     )) {
                         rdata.x = self.output_box.x;
                         rdata.y = self.output_box.y;
-                        self.forEachSurface(renderIter, rdata, false);
-                        return true;
+                        rendered_any = true;
                     }
                 }
             },
@@ -934,13 +971,17 @@ const Surface = struct {
                     if (output == self.server.outputAtCursor()) {
                         rdata.x = @floatToInt(i32, self.server.cursor.x);
                         rdata.y = @floatToInt(i32, self.server.cursor.y);
-                        self.forEachSurface(renderIter, rdata, false);
+                        rendered_any = true;
                     }
                 }
             },
             else => {},
         }
-        return false;
+
+        if (rendered_any) {
+            self.forEachSurface(renderIter, rdata, popups);
+        }
+        return rendered_any;
     }
 
     fn renderIter(
@@ -952,7 +993,7 @@ const Surface = struct {
         if (Surface.fromWlrSurface(@ptrCast(*wlr.wlr_surface, surf))) |surface| {
             surface.render(@ptrCast(*RenderData, @alignCast(@alignOf(*RenderData), data)), sx, sy);
         } else {
-            std.log.err("Could not find surface to render: {d}", .{@ptrCast(*wlr.wlr_surface, surf)});
+            std.log.err("Could not find surface to render: {s}", .{@ptrCast(*const wlr.wlr_surface_role, @ptrCast(*wlr.wlr_surface, surf).role).name});
         }
     }
 
@@ -1261,7 +1302,7 @@ const Output = struct {
             self,
             "frame",
             Output.onFrame,
-            &wlr_output.events.frame,
+            &self.damage.events.frame,
         );
         Signal.connect(
             void,
@@ -1576,6 +1617,24 @@ const Output = struct {
                 break;
             }
         }
+    }
+
+    fn getLayout(self: *Output) *wlr.wlr_output_layout_output {
+        return @ptrCast(
+            *wlr.wlr_output_layout_output,
+            wlr.wlr_output_layout_get(self.server.wlr_output_layout, self.wlr_output),
+        );
+    }
+
+    fn getBox(self: *Output, box: *wlr.wlr_box) void {
+        const layout = self.getLayout();
+        box.x = layout.x;
+        box.y = layout.y;
+        wlr.wlr_output_effective_resolution(
+            self.wlr_output,
+            &box.width,
+            &box.height,
+        );
     }
 
     const LAYERS_TOP_TO_BOTTOM: [LAYER_COUNT]usize = .{
@@ -2295,6 +2354,16 @@ const Server = struct {
     ) ?*wlr.wlr_surface {
         if (self.outputAt(x, y)) |output| {
             var iter = self.toplevels.first;
+            while (iter) |node| : (iter = node.next) {
+                var toplevel = node.data;
+                if (toplevel.workspace != output.active_workspace) {
+                    continue;
+                }
+                if (toplevel.surfaceAt(x, y, sx, sy)) |wlr_surface| {
+                    return wlr_surface;
+                }
+            }
+            iter = self.unmanaged_toplevels.first;
             while (iter) |node| : (iter = node.next) {
                 var toplevel = node.data;
                 if (toplevel.workspace != output.active_workspace) {
