@@ -71,10 +71,8 @@ const Surface = struct {
         self.has_border = false;
         self.ancestor = ancestor;
         self.output_box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
-        var output_box: wlr.wlr_box = undefined;
         if (self.server.outputAtCursor()) |output| {
             self.workspace = output.active_workspace;
-            output.getBox(&output_box);
         }
         self.is_actual_fullscreen = false;
 
@@ -95,6 +93,7 @@ const Surface = struct {
 
                 switch (typed_surface.role) {
                     wlr.WLR_XDG_SURFACE_ROLE_TOPLEVEL => {
+                        wlr.wlr_xdg_surface_ping(typed_surface);
                         self.list = &server.toplevels;
                         self.has_border = true;
 
@@ -107,15 +106,6 @@ const Surface = struct {
                                 *wlr.wlr_xdg_toplevel,
                                 @field(typed_surface, wlr_xdg_surface_union).toplevel,
                             ).events.request_fullscreen,
-                        );
-                    },
-                    wlr.WLR_XDG_SURFACE_ROLE_POPUP => {
-                        wlr.wlr_xdg_popup_unconstrain_from_box(
-                            @ptrCast(
-                                *wlr.wlr_xdg_popup,
-                                @field(typed_surface, wlr_xdg_surface_union).popup,
-                            ),
-                            &output_box,
                         );
                     },
                     else => {},
@@ -249,6 +239,7 @@ const Surface = struct {
     }
 
     fn onUnmap(self: *Surface, _: void) !void {
+        if (!self.mapped) return;
         self.mapped = false;
         wlr.wl_list_remove(&self.commit.link);
         switch (self.typed_surface) {
@@ -363,16 +354,10 @@ const Surface = struct {
 
         switch (self.typed_surface) {
             .xdg => |xdg| {
-                _ = wlr.wlr_xdg_toplevel_set_fullscreen(
-                    xdg,
-                    self.is_requested_fullscreen,
-                );
+                _ = wlr.wlr_xdg_toplevel_set_fullscreen(xdg, self.is_requested_fullscreen);
             },
             .xwayland => |xwayland| {
-                wlr.wlr_xwayland_surface_set_fullscreen(
-                    xwayland,
-                    self.is_requested_fullscreen,
-                );
+                wlr.wlr_xwayland_surface_set_fullscreen(xwayland, self.is_requested_fullscreen);
             },
             else => {},
         }
@@ -412,17 +397,33 @@ const Surface = struct {
             }) |subsurfaces| {
                 var iter: *wlr.wl_list = subsurfaces.next;
                 while (iter != subsurfaces) : (iter = iter.next) {
-                    var current = @fieldParentPtr(wlr.wlr_subsurface_parent_state, "link", iter);
                     self.onNewSubsurface(@fieldParentPtr(
                         wlr.wlr_subsurface,
                         "current",
-                        current,
+                        @fieldParentPtr(wlr.wlr_subsurface_parent_state, "link", iter),
                     )) catch unreachable;
                 }
             }
         }
     }
 
+    fn unconstrainPopup(self: *Surface) void {
+        switch (self.typed_surface) {
+            .xdg => |xdg| {
+                if (xdg.role == wlr.WLR_XDG_SURFACE_ROLE_POPUP) {
+                    if (self.getCenterOutput()) |output| {
+                        var box: wlr.wlr_box = undefined;
+                        output.getBox(&box);
+                        wlr.wlr_xdg_popup_unconstrain_from_box(
+                            @ptrCast(*wlr.wlr_xdg_popup, @field(xdg, wlr_xdg_surface_union).popup),
+                            &box,
+                        );
+                    }
+                }
+            },
+            else => {},
+        }
+    }
     fn toFront(self: *Surface) void {
         switch (self.typed_surface) {
             .xwayland => |xwayland| {
@@ -502,14 +503,18 @@ const Surface = struct {
         }
     }
 
+    fn isXdgPopup(wlr_surface: *wlr.wlr_surface) bool {
+        return std.mem.eql(u8, "xdg_popup", std.mem.span(
+            @ptrCast(*const wlr.wlr_surface_role, wlr_surface.role).name,
+        ));
+    }
+
     fn adjustBoundsFromPopup(xdg_popup: *wlr.wlr_xdg_popup, parent_box: *wlr.wlr_box) void {
         parent_box.x += xdg_popup.geometry.x;
         parent_box.y += xdg_popup.geometry.y;
 
         if (@ptrCast(?*wlr.wlr_surface, xdg_popup.parent)) |parent| {
-            var parent_role = @ptrCast(*const wlr.wlr_surface_role, parent.role);
-
-            if (std.mem.eql(u8, "xdg_popup", std.mem.span(parent_role.name))) {
+            if (Surface.isXdgPopup(parent)) {
                 adjustBoundsFromPopup(
                     @field(@ptrCast(
                         *wlr.wlr_xdg_surface,
@@ -539,8 +544,7 @@ const Surface = struct {
             },
             .subsurface => |subsurface| {
                 var parent: *wlr.wlr_surface = subsurface.parent;
-                const parent_role = @ptrCast(*const wlr.wlr_surface_role, parent.role);
-                if (std.mem.eql(u8, "xdg_popup", std.mem.span(parent_role.name))) {
+                if (Surface.isXdgPopup(parent)) {
                     adjustBoundsFromPopup(
                         @field(@ptrCast(
                             *wlr.wlr_xdg_surface,
@@ -581,6 +585,7 @@ const Surface = struct {
 
         if (uo.enter) {
             wlr.wlr_surface_send_enter(wlr_surface, uo.wlr_output);
+            if (Surface.fromWlrSurface(wlr_surface)) |s| s.unconstrainPopup();
         } else {
             wlr.wlr_surface_send_leave(wlr_surface, uo.wlr_output);
         }
@@ -1290,12 +1295,29 @@ fn scaleBox(box: *wlr.wlr_box, scale: f64) void {
 
 const Output = struct {
     fn init(self: *Output, server: *Server, wlr_output: *wlr.wlr_output) void {
+        _ = wlr.wlr_output_init_render(wlr_output, server.wlr_allocator, server.wlr_renderer);
+        if (wlr.wl_list_empty(&wlr_output.modes) == 0) {
+            const mode = wlr.wlr_output_preferred_mode(wlr_output);
+            wlr.wlr_output_set_mode(wlr_output, mode);
+            wlr.wlr_output_enable_adaptive_sync(wlr_output, true);
+            wlr.wlr_output_enable(wlr_output, true);
+            if (!wlr.wlr_output_commit(wlr_output)) {
+                alloc.destroy(self);
+                return;
+            }
+        }
+
         self.node.data = self;
         self.active_workspace = 1;
         self.wlr_output = wlr_output;
         self.server = server;
         self.wlr_output.data = self;
         self.damage = wlr.wlr_output_damage_create(wlr_output);
+        for (LAYERS_TOP_TO_BOTTOM) |layerIndex| {
+            self.layers[layerIndex] = std.TailQueue(*Surface){};
+        }
+        self.server.outputs.append(&self.node);
+        wlr.wlr_output_layout_add_auto(self.server.wlr_output_layout, self.wlr_output);
 
         Signal.connect(
             void,
@@ -1311,10 +1333,6 @@ const Output = struct {
             Output.onDestroy,
             &wlr_output.events.destroy,
         );
-
-        for (LAYERS_TOP_TO_BOTTOM) |layerIndex| {
-            self.layers[layerIndex] = std.TailQueue(*Surface){};
-        }
     }
 
     fn damageAll(self: *Output) void {
@@ -1902,21 +1920,8 @@ const Server = struct {
     }
 
     fn onNewOutput(self: *Server, wlr_output: *wlr.wlr_output) !void {
-        _ = wlr.wlr_output_init_render(wlr_output, self.wlr_allocator, self.wlr_renderer);
-        if (wlr.wl_list_empty(&wlr_output.modes) == 0) {
-            const mode = wlr.wlr_output_preferred_mode(wlr_output);
-            wlr.wlr_output_set_mode(wlr_output, mode);
-            wlr.wlr_output_enable_adaptive_sync(wlr_output, true);
-            wlr.wlr_output_enable(wlr_output, true);
-            if (!wlr.wlr_output_commit(wlr_output)) {
-                return;
-            }
-        }
-
         var output = try alloc.create(Output);
         output.init(self, wlr_output);
-        self.outputs.append(&output.node);
-        wlr.wlr_output_layout_add_auto(self.wlr_output_layout, wlr_output);
     }
 
     fn onNewXdgSurface(self: *Server, xdg_surface: *wlr.wlr_xdg_surface) !void {
@@ -2353,24 +2358,19 @@ const Server = struct {
         sy: *f64,
     ) ?*wlr.wlr_surface {
         if (self.outputAt(x, y)) |output| {
-            var iter = self.toplevels.first;
-            while (iter) |node| : (iter = node.next) {
-                var toplevel = node.data;
-                if (toplevel.workspace != output.active_workspace) {
-                    continue;
-                }
-                if (toplevel.surfaceAt(x, y, sx, sy)) |wlr_surface| {
-                    return wlr_surface;
-                }
-            }
-            iter = self.unmanaged_toplevels.first;
-            while (iter) |node| : (iter = node.next) {
-                var toplevel = node.data;
-                if (toplevel.workspace != output.active_workspace) {
-                    continue;
-                }
-                if (toplevel.surfaceAt(x, y, sx, sy)) |wlr_surface| {
-                    return wlr_surface;
+            for ([2]std.TailQueue(*Surface){
+                self.unmanaged_toplevels,
+                self.toplevels,
+            }) |list| {
+                var iter = list.first;
+                while (iter) |node| : (iter = node.next) {
+                    var toplevel = node.data;
+                    if (toplevel.workspace != output.active_workspace) {
+                        continue;
+                    }
+                    if (toplevel.surfaceAt(x, y, sx, sy)) |wlr_surface| {
+                        return wlr_surface;
+                    }
                 }
             }
         }
