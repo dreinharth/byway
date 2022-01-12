@@ -213,27 +213,30 @@ const Surface = struct {
         self.damage(if (self.server.config.damage_tracking == .full) false else true);
     }
 
+    fn shouldFocus(self: *Surface) bool {
+        return switch (self.typed_surface) {
+            .xwayland => |xwayland| !xwayland.override_redirect or
+                wlr.wlr_xwayland_or_surface_wants_focus(xwayland),
+            .layer => self.layer != wlr.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND and
+                self.layer != wlr.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM,
+            else => true,
+        };
+    }
+
     fn onMap(self: *Surface, _: void) !void {
         self.mapped = true;
         self.initWlrSurface();
 
-        var should_focus = true;
         if (self.has_border) self.place();
         switch (self.typed_surface) {
             .xwayland => |xwayland| {
                 self.output_box.x = xwayland.x;
                 self.output_box.y = xwayland.y;
-                if (xwayland.override_redirect) {
-                    should_focus = wlr.wlr_xwayland_or_surface_wants_focus(xwayland);
-                }
             },
             else => {},
         }
         if (self.list) |list| list.prepend(&self.node);
-
-        if (self.wlr_surface) |wlr_surface| {
-            if (should_focus) self.server.setKeyboardFocus(wlr_surface);
-        }
+        self.setKeyboardFocus();
         self.updateOutputs();
         self.server.damageAllOutputs();
     }
@@ -444,7 +447,7 @@ const Surface = struct {
 
     fn setKeyboardFocus(self: *Surface) void {
         if (self.wlr_surface) |wlr_surface| {
-            self.server.setKeyboardFocus(wlr_surface);
+            if (self.shouldFocus()) self.server.setKeyboardFocus(wlr_surface);
         }
     }
 
@@ -2008,6 +2011,10 @@ const Server = struct {
 
     fn setKeyboardFocus(self: *Server, wlr_surface: *wlr.wlr_surface) void {
         if (Surface.fromWlrSurface(wlr_surface)) |next_surface| {
+            if (!next_surface.shouldFocus()) {
+                return;
+            }
+
             if (self.seat.keyboard_state.focused_surface) |prev_wlr_surface| {
                 if (prev_wlr_surface == wlr_surface) {
                     return;
