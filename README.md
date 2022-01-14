@@ -56,7 +56,8 @@ See [config.json.example](./config.json.example) for a sample configuration.
 - `autostart`: array of commands to run on startup
 - `move_pixels`: pixels
 - `grow_pixels`: pixels
-- `damage_tracking`: one of `"minimal"`, `"partial"`, and `"full"`,
+- `damage_tracking`: one of `"minimal"` (redraws all outputs, but only on updates),
+`"partial"` (redraws whole surfaces on updates), and `"full"` (only redraws damaged areas),
 
 Hotkey Actions:
 

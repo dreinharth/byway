@@ -75,6 +75,12 @@ const Surface = struct {
             self.workspace = output.active_workspace;
         }
         self.is_actual_fullscreen = false;
+        self.borders = .{
+            .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+            .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+            .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+            .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+        };
 
         Signal.connect(void, self, "map", Surface.onMap, &typed_surface.events.map);
         Signal.connect(void, self, "unmap", Surface.onUnmap, &typed_surface.events.unmap);
@@ -746,6 +752,7 @@ const Surface = struct {
     fn updateBorders(self: *Surface) void {
         if (self.has_border) {
             if (self.wlr_surface) |wlr_surface| {
+                self.damageBorders();
                 var surface_width: i32 = wlr_surface.current.width;
                 var surface_height: i32 = wlr_surface.current.height;
                 var border_left: i32 = 0 - self.server.config.active_border_width;
@@ -782,6 +789,7 @@ const Surface = struct {
                         .height = self.server.config.active_border_width,
                     },
                 };
+                self.damageBorders();
             }
         }
     }
@@ -896,7 +904,6 @@ const Surface = struct {
                 self.setGeometry(output.total_box);
             }
         }
-        self.server.damageAllOutputs();
     }
 
     fn place(self: *Surface) void {
@@ -2709,27 +2716,27 @@ const Config = struct {
     };
 
     const Unparsed = struct {
-        tap_to_click: ?bool,
-        natural_scrolling: ?bool,
-        background_color: ?[4]f32,
-        border_color: ?[4]f32,
-        focused_color: ?[4]f32,
-        grabbed_color: ?[4]f32,
-        active_border_width: ?i32,
+        tap_to_click: ?bool = null,
+        natural_scrolling: ?bool = null,
+        background_color: ?[4]f32 = null,
+        border_color: ?[4]f32 = null,
+        focused_color: ?[4]f32 = null,
+        grabbed_color: ?[4]f32 = null,
+        active_border_width: ?i32 = null,
         hotkeys: ?[]struct {
             modifiers: []KeyModifier,
             key: []u8,
             action: Action,
             arg: []u8,
-        },
-        mouse_move_modifiers: ?[]KeyModifier,
-        mouse_move_button: ?MouseButton,
-        mouse_grow_modifiers: ?[]KeyModifier,
-        mouse_grow_button: ?MouseButton,
-        autostart: ?[][]u8,
-        move_pixels: ?u32,
-        grow_pixels: ?u32,
-        damage_tracking: ?DamageTrackingLevel,
+        } = null,
+        mouse_move_modifiers: ?[]KeyModifier = null,
+        mouse_move_button: ?MouseButton = null,
+        mouse_grow_modifiers: ?[]KeyModifier = null,
+        mouse_grow_button: ?MouseButton = null,
+        autostart: ?[][]u8 = null,
+        move_pixels: ?u32 = null,
+        grow_pixels: ?u32 = null,
+        damage_tracking: ?DamageTrackingLevel = null,
     };
 
     fn loadDefault(self: *Config) void {
