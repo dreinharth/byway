@@ -187,6 +187,12 @@ const Surface = struct {
 
     fn onCommit(self: *Surface, _: void) !void {
         switch (self.typed_surface) {
+            .xdg => |xdg| {
+                if (self.pending_serial > 0 and xdg.current.configure_serial >= self.pending_serial) {
+                    self.pending_serial = 0;
+                    self.server.damageAllOutputs();
+                }
+            },
             .layer => |layer_surface| {
                 if (layer_surface.output) |wlr_output| {
                     if (@ptrCast(
@@ -462,7 +468,7 @@ const Surface = struct {
 
         switch (self.typed_surface) {
             .xdg => |xdg| {
-                _ = wlr.wlr_xdg_toplevel_set_size(
+                self.pending_serial = wlr.wlr_xdg_toplevel_set_size(
                     xdg,
                     @intCast(u32, box.width),
                     @intCast(u32, box.height),
@@ -1138,6 +1144,7 @@ const Surface = struct {
     is_actual_fullscreen: bool,
     pre_fullscreen_position: wlr.wlr_box,
     workspace: u32,
+    pending_serial: u32,
 };
 
 const Keyboard = struct {
@@ -1356,6 +1363,7 @@ const Output = struct {
         var damage: wlr.pixman_region32_t = undefined;
         wlr.pixman_region32_init(&damage);
         var needs_frame: bool = false;
+
         if (!wlr.wlr_output_damage_attach_render(self.damage, &needs_frame, &damage)) {
             return;
         }
