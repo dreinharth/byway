@@ -56,6 +56,20 @@ pub fn main() !void {
 }
 
 const Surface = struct {
+    fn create(server: *Server, typed_surface: anytype, ancestor: ?*Surface) !?*Surface {
+        if (@TypeOf(typed_surface) == *wlr.wlr_xdg_surface and
+            typed_surface.role == wlr.WLR_XDG_SURFACE_ROLE_POPUP and
+            ancestor == null)
+        {
+            return null;
+        }
+
+        var surface = try alloc.create(Surface);
+        try surface.init(typed_surface, server, ancestor);
+
+        return surface;
+    }
+
     fn init(
         self: *Surface,
         typed_surface: anytype,
@@ -71,9 +85,7 @@ const Surface = struct {
         self.has_border = false;
         self.ancestor = ancestor;
         self.output_box = .{ .x = 0, .y = 0, .width = 0, .height = 0 };
-        if (self.server.outputAtCursor()) |output| {
-            self.workspace = output.active_workspace;
-        }
+        self.workspace = 0;
         self.is_actual_fullscreen = false;
         self.borders = .{
             .{ .x = 0, .y = 0, .width = 0, .height = 0 },
@@ -161,13 +173,7 @@ const Surface = struct {
                         typed_surface.output = output.wlr_output;
                     }
                 }
-                if (@ptrCast(
-                    ?*Output,
-                    @alignCast(
-                        @alignOf(?*Output),
-                        @ptrCast(*wlr.wlr_output, typed_surface.output).data,
-                    ),
-                )) |output| {
+                if (Output.fromWlrOutput(typed_surface.output)) |output| {
                     self.layer = typed_surface.pending.layer;
                     output.layers[self.layer].prepend(&self.node);
                     output.arrangeLayers();
@@ -194,27 +200,19 @@ const Surface = struct {
                 }
             },
             .layer => |layer_surface| {
-                if (layer_surface.output) |wlr_output| {
-                    if (@ptrCast(
-                        ?*Output,
-                        @alignCast(
-                            @alignOf(?*Output),
-                            @ptrCast(*wlr.wlr_output, wlr_output).data,
-                        ),
-                    )) |output| {
-                        if (layer_surface.current.committed != 0 or
-                            self.mapped != layer_surface.mapped)
-                        {
-                            self.mapped = layer_surface.mapped;
-                            if (self.layer != layer_surface.current.layer) {
-                                output.layers[self.layer].remove(&self.node);
-                                output.layers[layer_surface.current.layer].prepend(
-                                    &self.node,
-                                );
-                                self.layer = layer_surface.current.layer;
-                            }
-                            output.arrangeLayers();
+                if (Output.fromWlrOutput(layer_surface.output)) |output| {
+                    if (layer_surface.current.committed != 0 or
+                        self.mapped != layer_surface.mapped)
+                    {
+                        self.mapped = layer_surface.mapped;
+                        if (self.layer != layer_surface.current.layer) {
+                            output.layers[self.layer].remove(&self.node);
+                            output.layers[layer_surface.current.layer].prepend(
+                                &self.node,
+                            );
+                            self.layer = layer_surface.current.layer;
                         }
+                        output.arrangeLayers();
                     }
                 }
             },
@@ -296,17 +294,9 @@ const Surface = struct {
 
         switch (self.typed_surface) {
             .layer => |layer_surface| {
-                if (layer_surface.output) |wlr_output| {
-                    if (@ptrCast(
-                        ?*Output,
-                        @alignCast(
-                            @alignOf(?*Output),
-                            @ptrCast(*wlr.wlr_output, wlr_output).data,
-                        ),
-                    )) |output| {
-                        output.arrangeLayers();
-                        output.layers[self.layer].remove(&self.node);
-                    }
+                if (Output.fromWlrOutput(layer_surface.output)) |output| {
+                    output.arrangeLayers();
+                    output.layers[self.layer].remove(&self.node);
                     layer_surface.output = null;
                 }
             },
@@ -351,17 +341,15 @@ const Surface = struct {
     }
 
     fn onNewPopup(self: *Surface, wlr_popup: *wlr.wlr_xdg_popup) !void {
-        var surface = try alloc.create(Surface);
-        try surface.init(
-            @ptrCast(*wlr.wlr_xdg_surface, wlr_popup.base),
+        _ = try Surface.create(
             self.server,
-            if (self.has_border) self else self.ancestor,
+            @ptrCast(*wlr.wlr_xdg_surface, wlr_popup.base),
+            if (self.has_border) self else if (self.ancestor) |ancestor| ancestor else self,
         );
     }
 
     fn onNewSubsurface(self: *Surface, wlr_subsurface: *wlr.wlr_subsurface) !void {
-        var surface = try alloc.create(Surface);
-        try surface.init(wlr_subsurface, self.server, if (self.has_border) self else self.ancestor);
+        _ = try Surface.create(self.server, wlr_subsurface, if (self.has_border) self else self.ancestor);
     }
 
     fn onRequestFullscreen(self: *Surface, _: void) !void {
@@ -861,14 +849,6 @@ const Surface = struct {
         }
     }
 
-    fn isVisible(self: *Surface) bool {
-        if (self.getCenterOutput()) |output| {
-            return self.workspace == output.active_workspace;
-        }
-
-        return false;
-    }
-
     fn move(
         self: *Surface,
         dir: Config.Direction,
@@ -913,6 +893,10 @@ const Surface = struct {
     }
 
     fn place(self: *Surface) void {
+        if (self.server.outputAtCursor()) |output| {
+            self.workspace = output.active_workspace;
+        }
+
         var parent_box = wlr.wlr_box{ .x = 0, .y = 0, .width = 0, .height = 0 };
         var box: wlr.wlr_box = undefined;
         self.getGeometry(&box);
@@ -935,17 +919,7 @@ const Surface = struct {
 
         if (parent_box.width == 0) {
             if (self.server.outputAtCursor()) |output| {
-                const layout = @ptrCast(
-                    *wlr.wlr_output_layout_output,
-                    wlr.wlr_output_layout_get(self.server.wlr_output_layout, output.wlr_output),
-                );
-                wlr.wlr_output_effective_resolution(
-                    output.wlr_output,
-                    &parent_box.width,
-                    &parent_box.height,
-                );
-                parent_box.x = layout.x;
-                parent_box.y = layout.y;
+                output.getBox(&parent_box);
             }
         }
 
@@ -954,55 +928,96 @@ const Surface = struct {
         self.setGeometry(box);
     }
 
-    fn triggerRender(
-        self: *Surface,
-        output: *Output,
+    fn initDamageRender(
+        box: wlr.wlr_box,
+        region: *wlr.pixman_region32_t,
+        output_damage: *wlr.pixman_region32_t,
+    ) ?[]wlr.pixman_box32_t {
+        wlr.pixman_region32_init(region);
+        _ = wlr.pixman_region32_union_rect(
+            region,
+            region,
+            box.x,
+            box.y,
+            @intCast(u32, box.width),
+            @intCast(u32, box.height),
+        );
+        _ = wlr.pixman_region32_intersect(region, region, output_damage);
+        if (wlr.pixman_region32_not_empty(region) != 0) {
+            var num_rects: i32 = undefined;
+            var rects: [*c]wlr.pixman_box32_t = wlr.pixman_region32_rectangles(region, &num_rects);
+            return rects[0..@intCast(usize, num_rects)];
+        }
+
+        return null;
+    }
+
+    fn scaleLength(length: i32, offset: i32, scale: f64) i32 {
+        return @floatToInt(i32, @round(@intToFloat(f64, offset + length) * scale) -
+            @round(@intToFloat(f64, offset) * scale));
+    }
+
+    fn scaleBox(box: *wlr.wlr_box, scale: f64) void {
+        box.x = @floatToInt(i32, @round(@intToFloat(f64, box.x) * scale));
+        box.y = @floatToInt(i32, @round(@intToFloat(f64, box.y) * scale));
+        box.width = scaleLength(box.width, box.x, scale);
+        box.height = scaleLength(box.height, box.x, scale);
+    }
+
+    fn renderFirstFullscreen(surfaces: std.TailQueue(*Surface), rdata: *RenderData) bool {
+        var iter = surfaces.last;
+        return while (iter) |node| : (iter = node.prev) {
+            if (node.data.is_actual_fullscreen) {
+                node.data.triggerRender(rdata, false);
+                break true;
+            }
+        } else false;
+    }
+
+    fn renderList(
+        surfaces: std.TailQueue(*Surface),
         rdata: *RenderData,
         popups: bool,
-        render_fullscreen: bool,
-    ) bool {
-        var rendered_any = false;
+    ) void {
+        var iter = surfaces.last;
+        while (iter) |node| : (iter = node.prev) {
+            if (!node.data.isVisibleOn(rdata.output)) continue;
+            node.data.triggerRender(rdata, popups);
+        }
+    }
 
+    fn isVisible(self: *Surface) bool {
+        var iter = self.server.outputs.first;
+        return while (iter) |node| : (iter = node.next) {
+            if (self.isVisibleOn(node.data)) break true;
+        } else false;
+    }
+
+    fn isVisibleOn(self: *Surface, output: *Output) bool {
+        if (self.workspace != 0 and self.workspace != output.active_workspace) return false;
+        var box: wlr.wlr_box = undefined;
+        self.getGeometry(&box);
+        return wlr.wlr_output_layout_intersects(
+            output.server.wlr_output_layout,
+            output.wlr_output,
+            &box,
+        );
+    }
+
+    fn triggerRender(self: *Surface, rdata: *RenderData, popups: bool) void {
         switch (self.typed_surface) {
-            .layer => {
+            .drag_icon => |drag_icon| {
+                if (!drag_icon.mapped or rdata.output != self.server.outputAtCursor()) return;
+
+                rdata.x = @floatToInt(i32, self.server.cursor.x);
+                rdata.y = @floatToInt(i32, self.server.cursor.y);
+            },
+            else => {
                 rdata.x = self.output_box.x;
                 rdata.y = self.output_box.y;
-                rendered_any = true;
             },
-            .xwayland, .xdg => {
-                var box: wlr.wlr_box = undefined;
-                if (self.workspace == output.active_workspace and
-                    self.is_actual_fullscreen == render_fullscreen)
-                {
-                    self.getGeometry(&box);
-
-                    if (wlr.wlr_output_layout_intersects(
-                        output.server.wlr_output_layout,
-                        output.wlr_output,
-                        &box,
-                    )) {
-                        rdata.x = self.output_box.x;
-                        rdata.y = self.output_box.y;
-                        rendered_any = true;
-                    }
-                }
-            },
-            .drag_icon => |drag_icon| {
-                if (drag_icon.mapped) {
-                    if (output == self.server.outputAtCursor()) {
-                        rdata.x = @floatToInt(i32, self.server.cursor.x);
-                        rdata.y = @floatToInt(i32, self.server.cursor.y);
-                        rendered_any = true;
-                    }
-                }
-            },
-            else => {},
         }
-
-        if (rendered_any) {
-            self.forEachSurface(renderIter, rdata, popups);
-        }
-        return rendered_any;
+        self.forEachSurface(renderIter, rdata, popups);
     }
 
     fn renderIter(
@@ -1023,12 +1038,14 @@ const Surface = struct {
             if (wlr.wlr_surface_get_texture(wlr_surface)) |texture| {
                 var oxf: f64 = 0;
                 var oyf: f64 = 0;
+                var scale = rdata.output.wlr_output.scale;
                 wlr.wlr_output_layout_output_coords(
-                    rdata.server.wlr_output_layout,
-                    rdata.wlr_output,
+                    rdata.output.server.wlr_output_layout,
+                    rdata.output.wlr_output,
                     &oxf,
                     &oyf,
                 );
+
                 oxf += @intToFloat(f64, rdata.x + sx);
                 oyf += @intToFloat(f64, rdata.y + sy);
                 const ox = @floatToInt(i32, oxf);
@@ -1037,25 +1054,25 @@ const Surface = struct {
                 var region: wlr.pixman_region32_t = undefined;
 
                 if (self.has_border) {
-                    const color = if (self == rdata.server.grabbed_toplevel)
-                        &rdata.server.config.grabbed_color
-                    else if (wlr_surface == rdata.server.seat.keyboard_state.focused_surface)
-                        &rdata.server.config.focused_color
+                    const color = if (self == rdata.output.server.grabbed_toplevel)
+                        &rdata.output.server.config.grabbed_color
+                    else if (wlr_surface == rdata.output.server.seat.keyboard_state.focused_surface)
+                        &rdata.output.server.config.focused_color
                     else
-                        &rdata.server.config.border_color;
+                        &rdata.output.server.config.border_color;
                     for (self.borders) |border| {
                         var b = border;
                         b.x += ox;
                         b.y += oy;
-                        scaleBox(&b, rdata.wlr_output.scale);
+                        scaleBox(&b, scale);
                         if (initDamageRender(b, &region, rdata.damage)) |rects| {
                             for (rects) |rect| {
-                                scissor(rdata.wlr_output, rect);
+                                scissor(rdata.output.wlr_output, rect);
                                 wlr.wlr_render_rect(
-                                    rdata.wlr_output.renderer,
+                                    rdata.output.wlr_output.renderer,
                                     &b,
                                     color,
-                                    &rdata.wlr_output.transform_matrix,
+                                    &rdata.output.wlr_output.transform_matrix,
                                 );
                             }
                         }
@@ -1069,23 +1086,23 @@ const Surface = struct {
                     .width = wlr_surface.current.width,
                     .height = wlr_surface.current.height,
                 };
-                scaleBox(&box, rdata.wlr_output.scale);
+                scaleBox(&box, scale);
                 var matrix: [9]f32 = undefined;
                 const transform = wlr.wlr_output_transform_invert(wlr_surface.current.transform);
-                wlr.wlr_matrix_project_box(&matrix, &box, transform, 0, &rdata.wlr_output.transform_matrix);
+                wlr.wlr_matrix_project_box(&matrix, &box, transform, 0, &rdata.output.wlr_output.transform_matrix);
 
                 if (initDamageRender(box, &region, rdata.damage)) |rects| {
                     for (rects) |rect| {
-                        scissor(rdata.wlr_output, rect);
-                        _ = wlr.wlr_render_texture_with_matrix(rdata.wlr_output.renderer, texture, &matrix, 1);
+                        scissor(rdata.output.wlr_output, rect);
+                        _ = wlr.wlr_render_texture_with_matrix(rdata.output.wlr_output.renderer, texture, &matrix, 1);
                     }
                 }
                 wlr.pixman_region32_fini(&region);
                 wlr.wlr_surface_send_frame_done(wlr_surface, &rdata.when);
                 wlr.wlr_presentation_surface_sampled_on_output(
-                    rdata.server.presentation,
+                    rdata.output.server.presentation,
                     wlr_surface,
-                    rdata.wlr_output,
+                    rdata.output.wlr_output,
                 );
             }
         }
@@ -1148,6 +1165,12 @@ const Surface = struct {
 };
 
 const Keyboard = struct {
+    fn create(server: *Server, device: *wlr.wlr_input_device) !?*Keyboard {
+        var keyboard = try alloc.create(Keyboard);
+        keyboard.init(server, device);
+
+        return keyboard;
+    }
     fn init(self: *Keyboard, server: *Server, device: *wlr.wlr_input_device) void {
         self.node.data = self;
         self.server = server;
@@ -1155,6 +1178,7 @@ const Keyboard = struct {
         self.wlr_keyboard = @field(device, wlr_input_device_union).keyboard;
         self.captured_modifiers = 0;
 
+        self.server.keyboards.append(&self.node);
         var context = wlr.xkb_context_new(wlr.XKB_CONTEXT_NO_FLAGS);
         var keymap = wlr.xkb_keymap_new_from_names(
             context,
@@ -1250,37 +1274,12 @@ const Keyboard = struct {
 };
 
 const RenderData = struct {
-    server: *Server,
-    wlr_output: *wlr.wlr_output,
+    output: *Output,
     x: i32 = -1,
     y: i32 = -1,
     when: wlr.timespec,
     damage: *wlr.pixman_region32_t,
 };
-
-fn initDamageRender(
-    box: wlr.wlr_box,
-    region: *wlr.pixman_region32_t,
-    output_damage: *wlr.pixman_region32_t,
-) ?[]wlr.pixman_box32_t {
-    wlr.pixman_region32_init(region);
-    _ = wlr.pixman_region32_union_rect(
-        region,
-        region,
-        box.x,
-        box.y,
-        @intCast(u32, box.width),
-        @intCast(u32, box.height),
-    );
-    _ = wlr.pixman_region32_intersect(region, region, output_damage);
-    if (wlr.pixman_region32_not_empty(region) != 0) {
-        var num_rects: i32 = undefined;
-        var rects: [*c]wlr.pixman_box32_t = wlr.pixman_region32_rectangles(region, &num_rects);
-        return rects[0..@intCast(usize, num_rects)];
-    }
-
-    return null;
-}
 
 fn scissor(wlr_output: *wlr.wlr_output, rect: wlr.pixman_box32_t) void {
     var box = wlr.wlr_box{
@@ -1298,19 +1297,13 @@ fn scissor(wlr_output: *wlr.wlr_output, rect: wlr.pixman_box32_t) void {
     wlr.wlr_renderer_scissor(wlr_output.renderer, &box);
 }
 
-fn scaleLength(length: i32, offset: i32, scale: f64) i32 {
-    return @floatToInt(i32, @round(@intToFloat(f64, offset + length) * scale) -
-        @round(@intToFloat(f64, offset) * scale));
-}
-
-fn scaleBox(box: *wlr.wlr_box, scale: f64) void {
-    box.x = @floatToInt(i32, @round(@intToFloat(f64, box.x) * scale));
-    box.y = @floatToInt(i32, @round(@intToFloat(f64, box.y) * scale));
-    box.width = scaleLength(box.width, box.x, scale);
-    box.height = scaleLength(box.height, box.x, scale);
-}
-
 const Output = struct {
+    fn create(server: *Server, wlr_output: *wlr.wlr_output) !?*Output {
+        var output = try alloc.create(Output);
+        output.init(server, wlr_output);
+
+        return output;
+    }
     fn init(self: *Output, server: *Server, wlr_output: *wlr.wlr_output) void {
         _ = wlr.wlr_output_init_render(wlr_output, server.wlr_allocator, server.wlr_renderer);
         if (wlr.wl_list_empty(&wlr_output.modes) == 0) {
@@ -1352,6 +1345,14 @@ const Output = struct {
         );
     }
 
+    fn fromWlrOutput(wlr_output: ?*wlr.wlr_output) ?*Output {
+        if (wlr_output) |output| {
+            return @ptrCast(?*Output, @alignCast(@alignOf(?*Output), output.data));
+        }
+
+        return null;
+    }
+
     fn damageAll(self: *Output) void {
         wlr.wlr_output_damage_add_whole(self.damage);
     }
@@ -1376,12 +1377,7 @@ const Output = struct {
             );
 
             if (wlr.pixman_region32_not_empty(&damage) != 0) {
-                var rdata: RenderData = .{
-                    .server = self.server,
-                    .wlr_output = self.wlr_output,
-                    .damage = &damage,
-                    .when = now,
-                };
+                var rdata: RenderData = .{ .output = self, .damage = &damage, .when = now };
 
                 var nrects: i32 = undefined;
                 for (wlr.pixman_region32_rectangles(&damage, &nrects)[0..@intCast(usize, nrects)]) |rect| {
@@ -1389,24 +1385,20 @@ const Output = struct {
                     wlr.wlr_renderer_clear(self.wlr_output.renderer, &self.server.config.background_color);
                 }
 
-                if (!self.renderList(self.server.toplevels, &rdata, false, true)) {
-                    _ = self.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], &rdata, false, false);
-                    _ = self.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM], &rdata, false, false);
-                    _ = self.renderList(self.server.toplevels, &rdata, false, false);
-                    _ = self.renderList(self.server.unmanaged_toplevels, &rdata, false, false);
-                    _ = self.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_TOP], &rdata, false, false);
-                    _ = self.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &rdata, false, false);
+                if (!Surface.renderFirstFullscreen(self.server.toplevels, &rdata)) {
+                    Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], &rdata, false);
+                    Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM], &rdata, false);
+                    Surface.renderList(self.server.toplevels, &rdata, false);
+                    Surface.renderList(self.server.unmanaged_toplevels, &rdata, false);
+                    Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_TOP], &rdata, false);
+                    Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &rdata, false);
                 }
-                if (self.server.grabbed_toplevel) |grabbed_toplevel| {
-                    _ = grabbed_toplevel.triggerRender(self, &rdata, false, false);
-                }
-                if (self.server.drag_icon) |drag_icon| {
-                    _ = drag_icon.triggerRender(self, &rdata, false, false);
-                }
-                _ = self.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], &rdata, true, false);
-                _ = self.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM], &rdata, true, false);
-                _ = self.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_TOP], &rdata, true, false);
-                _ = self.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &rdata, true, false);
+                if (self.server.grabbed_toplevel) |grabbed| grabbed.triggerRender(&rdata, false);
+                if (self.server.drag_icon) |drag_icon| drag_icon.triggerRender(&rdata, false);
+                Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], &rdata, true);
+                Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM], &rdata, true);
+                Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_TOP], &rdata, true);
+                Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &rdata, true);
             }
             wlr.wlr_renderer_scissor(self.wlr_output.renderer, null);
             wlr.wlr_output_render_software_cursors(self.wlr_output, null);
@@ -1428,27 +1420,6 @@ const Output = struct {
 
         // TODO: move toplevels to remaining output
         alloc.destroy(self);
-    }
-
-    fn renderList(
-        self: *Output,
-        surfaces: std.TailQueue(*Surface),
-        rdata: *RenderData,
-        popups: bool,
-        render_fullscreen: bool,
-    ) bool {
-        var rendered_any = false;
-        var iter = surfaces.last;
-        while (iter) |node| : (iter = node.prev) {
-            rendered_any = node.data.triggerRender(
-                self,
-                rdata,
-                popups,
-                render_fullscreen,
-            ) or rendered_any;
-        }
-
-        return rendered_any;
     }
 
     fn onLayoutChanged(self: *Output, config: *wlr.wlr_output_configuration_v1) void {
@@ -1583,13 +1554,11 @@ const Output = struct {
         sy: *f64,
     ) ?*wlr.wlr_surface {
         var iter = self.layers[layer].last;
-        while (iter) |node| : (iter = node.prev) {
+        return while (iter) |node| : (iter = node.prev) {
             if (node.data.surfaceAt(x, y, sx, sy)) |wlr_surface| {
-                return wlr_surface;
+                break wlr_surface;
             }
-        }
-
-        return null;
+        } else null;
     }
 
     fn handleLayerExclusives(
@@ -1938,25 +1907,19 @@ const Server = struct {
     }
 
     fn onNewOutput(self: *Server, wlr_output: *wlr.wlr_output) !void {
-        var output = try alloc.create(Output);
-        output.init(self, wlr_output);
+        _ = try Output.create(self, wlr_output);
     }
 
     fn onNewXdgSurface(self: *Server, xdg_surface: *wlr.wlr_xdg_surface) !void {
-        if (xdg_surface.role == wlr.WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
-            var surface = try alloc.create(Surface);
-            try surface.init(xdg_surface, self, null);
-        }
+        _ = try Surface.create(self, xdg_surface, null);
     }
 
     fn onNewXwaylandSurface(self: *Server, xwayland_surface: *wlr.wlr_xwayland_surface) !void {
-        var surface = try alloc.create(Surface);
-        try surface.init(xwayland_surface, self, null);
+        _ = try Surface.create(self, xwayland_surface, null);
     }
 
     fn onNewLayerSurface(self: *Server, wlr_layer_surface: *wlr.wlr_layer_surface_v1) !void {
-        var surface = try alloc.create(Surface);
-        try surface.init(wlr_layer_surface, self, null);
+        _ = try Surface.create(self, wlr_layer_surface, null);
     }
 
     fn onCursorMotion(self: *Server, event: *wlr.wlr_event_pointer_motion) !void {
@@ -2061,9 +2024,7 @@ const Server = struct {
     fn onNewInputDevice(self: *Server, device: *wlr.wlr_input_device) !void {
         switch (device.type) {
             wlr.WLR_INPUT_DEVICE_KEYBOARD => {
-                var keyboard = try alloc.create(Keyboard);
-                keyboard.init(self, device);
-                self.keyboards.append(&keyboard.node);
+                _ = try Keyboard.create(self, device);
             },
             wlr.WLR_INPUT_DEVICE_POINTER => {
                 if (wlr.wlr_input_device_is_libinput(device)) {
@@ -2118,11 +2079,7 @@ const Server = struct {
     }
 
     fn onStartDrag(self: *Server, wlr_drag: *wlr.wlr_drag) !void {
-        self.drag_icon = try alloc.create(Surface);
-        if (self.drag_icon) |drag_icon| {
-            try drag_icon.init(@ptrCast(*wlr.wlr_drag_icon, wlr_drag.icon), self, null);
-        }
-
+        self.drag_icon = try Surface.create(self, @ptrCast(*wlr.wlr_drag_icon, wlr_drag.icon), null);
         Signal.connect(
             void,
             self,
@@ -2279,14 +2236,7 @@ const Server = struct {
     }
 
     fn outputAt(self: *Server, x: f64, y: f64) ?*Output {
-        if (@ptrCast(
-            ?*wlr.wlr_output,
-            wlr.wlr_output_layout_output_at(self.wlr_output_layout, x, y),
-        )) |wlr_output| {
-            return @ptrCast(*Output, @alignCast(@alignOf(*Output), wlr_output.data));
-        }
-
-        return null;
+        return Output.fromWlrOutput(wlr.wlr_output_layout_output_at(self.wlr_output_layout, x, y));
     }
 
     fn outputAtCursor(self: *Server) ?*Output {
@@ -2443,24 +2393,27 @@ const Server = struct {
     }
 
     fn grabToplevelForResizeMove(self: *Server, cursor_mode: CursorMode) void {
-        if (self.seat.pointer_state.focused_surface) |wlr_surface| {
-            if (Surface.fromWlrSurface(wlr_surface)) |surface| {
-                if (surface.getToplevel()) |toplevel| {
-                    if (!toplevel.is_actual_fullscreen) {
-                        var box: wlr.wlr_box = undefined;
-                        toplevel.getGeometry(&box);
-                        self.grabbed_toplevel = toplevel;
-                        self.cursor_mode = cursor_mode;
-                        self.grab_x = @floatToInt(i32, self.cursor.x) - box.x;
-                        self.grab_y = @floatToInt(i32, self.cursor.y) - box.y;
-                    }
-                }
+        if (self.getFocusedToplevel()) |toplevel| {
+            if (!toplevel.is_actual_fullscreen) {
+                var box: wlr.wlr_box = undefined;
+                toplevel.getGeometry(&box);
+                self.grabbed_toplevel = toplevel;
+                self.cursor_mode = cursor_mode;
+                self.grab_x = @floatToInt(i32, self.cursor.x) - box.x;
+                self.grab_y = @floatToInt(i32, self.cursor.y) - box.y;
             }
         }
     }
 
+    fn getFocusedToplevel(self: *Server) ?*Surface {
+        if (Surface.fromWlrSurface(self.seat.keyboard_state.focused_surface)) |surface| {
+            return surface.getToplevel();
+        }
+        return null;
+    }
+
     fn actionToplevelToFront(self: *Server, _: []const u8) void {
-        if (Surface.fromWlrSurface(self.seat.keyboard_state.focused_surface)) |toplevel| {
+        if (self.getFocusedToplevel()) |toplevel| {
             self.toplevels.remove(&toplevel.node);
             self.toplevels.prepend(&toplevel.node);
             toplevel.toFront();
@@ -2469,24 +2422,20 @@ const Server = struct {
     }
 
     fn actionToplevelToBack(self: *Server, _: []const u8) void {
-        if (self.seat.keyboard_state.focused_surface) |focused_surface| {
-            if (Surface.fromWlrSurface(focused_surface)) |toplevel| {
-                self.toplevels.remove(&toplevel.node);
-                self.toplevels.append(&toplevel.node);
-                toplevel.toBack();
-                self.damageAllOutputs();
-            }
+        if (self.getFocusedToplevel()) |toplevel| {
+            self.toplevels.remove(&toplevel.node);
+            self.toplevels.append(&toplevel.node);
+            toplevel.toBack();
+            self.damageAllOutputs();
         }
     }
 
     fn actionToplevelToWorkspace(self: *Server, arg: []const u8) void {
-        if (self.seat.keyboard_state.focused_surface) |focused_surface| {
-            if (Surface.fromWlrSurface(focused_surface)) |toplevel| {
-                const workspace = std.fmt.parseUnsigned(u32, arg, 10) catch return;
-                toplevel.workspace = workspace;
-                self.processCursorMotion(0);
-                self.damageAllOutputs();
-            }
+        if (self.getFocusedToplevel()) |toplevel| {
+            const workspace = std.fmt.parseUnsigned(u32, arg, 10) catch return;
+            toplevel.workspace = workspace;
+            self.processCursorMotion(0);
+            self.damageAllOutputs();
         }
     }
 
@@ -2520,7 +2469,7 @@ const Server = struct {
         if (if (self.grabbed_toplevel != null)
             self.grabbed_toplevel
         else
-            Surface.fromWlrSurface(self.seat.keyboard_state.focused_surface)) |start_toplevel|
+            self.getFocusedToplevel()) |start_toplevel|
         {
             var start_node = &start_toplevel.node;
             var iter = Server.nextIterCirc(self.toplevels, start_node, forward);
@@ -2573,9 +2522,9 @@ const Server = struct {
         comptime abscissa: []const u8,
         comptime ordinate: []const u8,
     ) void {
-        if (Surface.fromWlrSurface(self.seat.keyboard_state.focused_surface)) |surface| {
+        if (self.getFocusedToplevel()) |toplevel| {
             if (std.meta.stringToEnum(Config.Direction, arg)) |dir| {
-                surface.move(dir, self.config.move_pixels, abscissa, ordinate);
+                toplevel.move(dir, self.config.move_pixels, abscissa, ordinate);
             }
         }
     }
@@ -2588,9 +2537,9 @@ const Server = struct {
     }
 
     fn actionToggleFullscreen(self: *Server, _: []const u8) void {
-        if (Surface.fromWlrSurface(self.seat.keyboard_state.focused_surface)) |surface| {
+        if (self.getFocusedToplevel()) |toplevel| {
             self.actionToplevelToFront("");
-            surface.toggleFullscreen();
+            toplevel.toggleFullscreen();
         }
     }
 
