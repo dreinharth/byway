@@ -14,7 +14,13 @@
     "mouse_move_button": "left",
     "mouse_grow_modifiers": ["logo", "shift"],
     "mouse_grow_button": "left",
-      "hotkeys": [
+    "hotkeys": [
+        {
+            "modifiers": ["logo"],
+            "key": "Escape",
+            "action": "toggle_spread_view",
+            "arg": ""
+        },
         {
             "modifiers": ["ctrl", "shift", "alt"],
             "key": "R",

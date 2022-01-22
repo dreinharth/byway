@@ -979,10 +979,13 @@ const Surface = struct {
         rdata: *RenderData,
         popups: bool,
     ) void {
+        rdata.spread.set(surfaces, rdata.output);
         var iter = surfaces.last;
+        rdata.spread.index = 0;
         while (iter) |node| : (iter = node.prev) {
             if (!node.data.isVisibleOn(rdata.output)) continue;
             node.data.triggerRender(rdata, popups);
+            if (rdata.output.spread_view) rdata.spread.index += 1;
         }
     }
 
@@ -1006,6 +1009,21 @@ const Surface = struct {
 
     fn triggerRender(self: *Surface, rdata: *RenderData, popups: bool) void {
         switch (self.typed_surface) {
+            .xdg, .xwayland => {
+                if (rdata.output.spread_view) {
+                    const col = @intCast(i32, @rem(rdata.spread.index, rdata.spread.cols));
+                    const row = @intCast(i32, @divFloor(rdata.spread.index, rdata.spread.cols));
+                    rdata.x = col * rdata.spread.width + rdata.spread.margin_x + rdata.spread.layout.x;
+                    rdata.y = row * rdata.spread.height + rdata.spread.margin_y + rdata.spread.layout.y;
+                    rdata.spread.scale = @minimum(
+                        @intToFloat(f32, rdata.spread.width - 2 * rdata.spread.margin_x) / @intToFloat(f32, self.output_box.width),
+                        @intToFloat(f32, rdata.spread.height - 2 * rdata.spread.margin_y) / @intToFloat(f32, self.output_box.height),
+                    );
+                } else {
+                    rdata.x = self.output_box.x;
+                    rdata.y = self.output_box.y;
+                }
+            },
             .drag_icon => |drag_icon| {
                 if (!drag_icon.mapped or rdata.output != self.server.outputAtCursor()) return;
 
@@ -1038,7 +1056,6 @@ const Surface = struct {
             if (wlr.wlr_surface_get_texture(wlr_surface)) |texture| {
                 var oxf: f64 = 0;
                 var oyf: f64 = 0;
-                var scale = rdata.output.wlr_output.scale;
                 wlr.wlr_output_layout_output_coords(
                     rdata.output.server.wlr_output_layout,
                     rdata.output.wlr_output,
@@ -1053,7 +1070,7 @@ const Surface = struct {
 
                 var region: wlr.pixman_region32_t = undefined;
 
-                if (self.has_border) {
+                if (self.has_border and !rdata.output.spread_view) {
                     const color = if (self == rdata.output.server.grabbed_toplevel)
                         &rdata.output.server.config.grabbed_color
                     else if (wlr_surface == rdata.output.server.seat.keyboard_state.focused_surface)
@@ -1064,7 +1081,7 @@ const Surface = struct {
                         var b = border;
                         b.x += ox;
                         b.y += oy;
-                        scaleBox(&b, scale);
+                        scaleBox(&b, rdata.output.wlr_output.scale);
                         if (initDamageRender(b, &region, rdata.damage)) |rects| {
                             for (rects) |rect| {
                                 scissor(rdata.output.wlr_output, rect);
@@ -1083,10 +1100,10 @@ const Surface = struct {
                 var box = wlr.wlr_box{
                     .x = ox,
                     .y = oy,
-                    .width = wlr_surface.current.width,
-                    .height = wlr_surface.current.height,
+                    .width = @floatToInt(i32, @intToFloat(f32, wlr_surface.current.width) * rdata.spread.scale),
+                    .height = @floatToInt(i32, @intToFloat(f32, wlr_surface.current.height) * rdata.spread.scale),
                 };
-                scaleBox(&box, scale);
+                scaleBox(&box, rdata.output.wlr_output.scale);
                 var matrix: [9]f32 = undefined;
                 const transform = wlr.wlr_output_transform_invert(wlr_surface.current.transform);
                 wlr.wlr_matrix_project_box(&matrix, &box, transform, 0, &rdata.output.wlr_output.transform_matrix);
@@ -1229,6 +1246,12 @@ const Keyboard = struct {
         if (nsyms > 0) {
             const modifiers: u32 = wlr.wlr_keyboard_get_modifiers(self.wlr_keyboard);
             if (event.state == wlr.WL_KEYBOARD_KEY_STATE_PRESSED) {
+                if (self.server.outputAtCursor()) |output| {
+                    if (output.spread_view and modifiers == 0 and syms[0] == wlr.XKB_KEY_Escape) {
+                        output.toggleSpreadView();
+                        return;
+                    }
+                }
                 if (self.server.input_inhibit_mgr.active_inhibitor == null) {
                     for (syms[0..@intCast(usize, nsyms)]) |symbol| {
                         handled = self.handleKeybinding(modifiers, symbol) or handled;
@@ -1273,12 +1296,45 @@ const Keyboard = struct {
     captured_modifiers: u32,
 };
 
+const SpreadParams = struct {
+    fn set(self: *SpreadParams, surfaces: std.TailQueue(*Surface), output: *Output) void {
+        self.scale = 1;
+        if (!output.spread_view) return;
+        var visible_count: f32 = 0;
+        var iter = surfaces.last;
+        while (iter) |node| : (iter = node.prev) {
+            if (node.data.isVisibleOn(output)) visible_count += 1;
+        }
+        if (visible_count == 0) return;
+        self.layout = output.getLayout();
+        self.rows = @floatToInt(u32, @sqrt(visible_count));
+        self.cols = @floatToInt(u32, @ceil(visible_count / @intToFloat(f64, self.rows)));
+        var output_box: wlr.wlr_box = undefined;
+        output.getBox(&output_box);
+        const margin_ratio = 20;
+        self.margin_x = @divFloor(output_box.width, margin_ratio);
+        self.margin_y = @divFloor(output_box.height, margin_ratio);
+        self.width = @divFloor(output_box.width, @intCast(i32, self.cols));
+        self.height = @divFloor(output_box.height, @intCast(i32, self.rows));
+    }
+
+    cols: u32,
+    rows: u32,
+    index: u32,
+    scale: f32,
+    layout: *wlr.wlr_output_layout_output,
+    margin_x: i32,
+    margin_y: i32,
+    width: i32,
+    height: i32,
+};
 const RenderData = struct {
     output: *Output,
     x: i32 = -1,
     y: i32 = -1,
     when: wlr.timespec,
     damage: *wlr.pixman_region32_t,
+    spread: SpreadParams = undefined,
 };
 
 fn scissor(wlr_output: *wlr.wlr_output, rect: wlr.pixman_box32_t) void {
@@ -1327,6 +1383,7 @@ const Output = struct {
             self.layers[layerIndex] = std.TailQueue(*Surface){};
         }
         self.server.outputs.append(&self.node);
+        self.spread_view = false;
         wlr.wlr_output_layout_add_auto(self.server.wlr_output_layout, self.wlr_output);
 
         Signal.connect(
@@ -1378,6 +1435,7 @@ const Output = struct {
 
             if (wlr.pixman_region32_not_empty(&damage) != 0) {
                 var rdata: RenderData = .{ .output = self, .damage = &damage, .when = now };
+                rdata.spread.scale = 1;
 
                 var nrects: i32 = undefined;
                 for (wlr.pixman_region32_rectangles(&damage, &nrects)[0..@intCast(usize, nrects)]) |rect| {
@@ -1642,6 +1700,11 @@ const Output = struct {
         );
     }
 
+    fn toggleSpreadView(self: *Output) void {
+        self.spread_view = !self.spread_view;
+        self.damageAll();
+    }
+
     const LAYERS_TOP_TO_BOTTOM: [LAYER_COUNT]usize = .{
         wlr.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
         wlr.ZWLR_LAYER_SHELL_V1_LAYER_TOP,
@@ -1665,6 +1728,7 @@ const Output = struct {
     layers: [LAYER_COUNT]std.TailQueue(*Surface),
     active_workspace: u32,
     damage: *wlr.wlr_output_damage,
+    spread_view: bool,
 };
 
 const Server = struct {
@@ -1934,6 +1998,30 @@ const Server = struct {
 
     fn onCursorButton(self: *Server, event: *wlr.wlr_event_pointer_button) !void {
         wlr.wlr_idle_notify_activity(self.idle, self.seat);
+
+        if (self.outputAtCursor()) |output| {
+            if (output.spread_view) {
+                var spread: SpreadParams = undefined;
+                spread.set(self.toplevels, output);
+                if (spread.cols == 0) return;
+                const layout = output.getLayout();
+                const col = @divTrunc(@floatToInt(i32, self.cursor.x) - layout.x, spread.width);
+                const row = @divTrunc(@floatToInt(i32, self.cursor.y) - layout.y, spread.height);
+                var index = row * @intCast(i32, spread.cols) + col;
+                var iter = self.toplevels.last;
+                while (iter) |node| : ({
+                    iter = node.prev;
+                    index -= 1;
+                }) {
+                    if (index == 0) {
+                        self.toplevelToFront(node.data);
+                        break;
+                    }
+                }
+                output.toggleSpreadView();
+                return;
+            }
+        }
         self.processCursorMotion(event.time_msec);
 
         var handled = false;
@@ -2255,6 +2343,8 @@ const Server = struct {
         }
 
         if (self.outputAtCursor()) |output| {
+            if (output.spread_view) return;
+
             var sx: f64 = undefined;
             var sy: f64 = undefined;
             var wlr_surface: ?*wlr.wlr_surface = null;
@@ -2412,12 +2502,17 @@ const Server = struct {
         return null;
     }
 
+    fn toplevelToFront(self: *Server, surface: *Surface) void {
+        surface.setKeyboardFocus();
+        self.toplevels.remove(&surface.node);
+        self.toplevels.prepend(&surface.node);
+        surface.toFront();
+        self.damageAllOutputs();
+    }
+
     fn actionToplevelToFront(self: *Server, _: []const u8) void {
         if (self.getFocusedToplevel()) |toplevel| {
-            self.toplevels.remove(&toplevel.node);
-            self.toplevels.prepend(&toplevel.node);
-            toplevel.toFront();
-            self.damageAllOutputs();
+            self.toplevelToFront(toplevel);
         }
     }
 
@@ -2446,6 +2541,10 @@ const Server = struct {
             self.processCursorMotion(0);
             output.damageAll();
         }
+    }
+
+    fn actionToggleSpreadView(self: *Server, _: []const u8) void {
+        if (self.outputAtCursor()) |output| output.toggleSpreadView();
     }
 
     fn actionQuit(self: *Server, _: []const u8) void {
@@ -2509,9 +2608,8 @@ const Server = struct {
         self.modifier_pressed = pressed;
         if (!pressed and self.cursor_mode == .passthrough) {
             if (self.grabbed_toplevel) |grabbed_toplevel| {
-                grabbed_toplevel.setKeyboardFocus();
-                self.actionToplevelToFront("");
                 self.grabbed_toplevel = null;
+                self.toplevelToFront(grabbed_toplevel);
             }
         }
     }
@@ -2538,7 +2636,7 @@ const Server = struct {
 
     fn actionToggleFullscreen(self: *Server, _: []const u8) void {
         if (self.getFocusedToplevel()) |toplevel| {
-            self.actionToplevelToFront("");
+            self.toplevelToFront(toplevel);
             toplevel.toggleFullscreen();
         }
     }
@@ -2635,6 +2733,7 @@ const Config = struct {
         move_toplevel,
         grow_toplevel,
         toggle_fullscreen,
+        toggle_spread_view,
         switch_to_workspace,
         toplevel_to_workspace,
         quit,
@@ -2844,6 +2943,7 @@ const Config = struct {
                     .toggle_fullscreen => Server.actionToggleFullscreen,
                     .switch_to_workspace => Server.actionSwitchToWorkspace,
                     .toplevel_to_workspace => Server.actionToplevelToWorkspace,
+                    .toggle_spread_view => Server.actionToggleSpreadView,
                     .quit => Server.actionQuit,
                     .chvt => Server.actionChvt,
                     .reload_config => Server.actionReloadConfig,
