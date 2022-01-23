@@ -748,48 +748,41 @@ const Surface = struct {
     }
 
     fn updateBorders(self: *Surface) void {
-        if (self.has_border) {
-            if (self.wlr_surface) |wlr_surface| {
-                self.damageBorders();
-                var surface_width: i32 = wlr_surface.current.width;
-                var surface_height: i32 = wlr_surface.current.height;
-                var border_left: i32 = 0 - self.server.config.active_border_width;
-                var border_top: i32 = 0 - self.server.config.active_border_width;
-                if (wlr_surface.opaque_region.extents.x2 > 0) {
-                    surface_width = wlr_surface.opaque_region.extents.x2 - wlr_surface.opaque_region.extents.x1;
-                    surface_height = wlr_surface.opaque_region.extents.y2 - wlr_surface.opaque_region.extents.y1;
-                    border_left = wlr_surface.opaque_region.extents.x1 - self.server.config.active_border_width;
-                    border_top = wlr_surface.opaque_region.extents.y1 - self.server.config.active_border_width;
-                }
-                self.borders = .{
-                    .{ // top
-                        .x = border_left,
-                        .y = border_top,
-                        .width = surface_width + 2 * self.server.config.active_border_width,
-                        .height = self.server.config.active_border_width,
-                    },
-                    .{ // left
-                        .x = border_left,
-                        .y = border_top + self.server.config.active_border_width,
-                        .width = self.server.config.active_border_width,
-                        .height = surface_height,
-                    },
-                    .{ // right
-                        .x = border_left + surface_width + self.server.config.active_border_width,
-                        .y = border_top + self.server.config.active_border_width,
-                        .width = self.server.config.active_border_width,
-                        .height = surface_height,
-                    },
-                    .{ // bottom
-                        .x = border_left,
-                        .y = border_top + surface_height + self.server.config.active_border_width,
-                        .width = surface_width + 2 * self.server.config.active_border_width,
-                        .height = self.server.config.active_border_width,
-                    },
-                };
-                self.damageBorders();
-            }
-        }
+        if (!self.has_border) return;
+
+        var box: wlr.wlr_box = undefined;
+        self.getGeometry(&box);
+        box.x -= self.output_box.x;
+        box.y -= self.output_box.y;
+        var border_left: i32 = box.x - self.server.config.active_border_width;
+        var border_top: i32 = box.y - self.server.config.active_border_width;
+        self.borders = .{
+            .{ // top
+                .x = border_left,
+                .y = border_top,
+                .width = box.width + 2 * self.server.config.active_border_width,
+                .height = self.server.config.active_border_width,
+            },
+            .{ // left
+                .x = border_left,
+                .y = border_top + self.server.config.active_border_width,
+                .width = self.server.config.active_border_width,
+                .height = box.height,
+            },
+            .{ // right
+                .x = border_left + box.width + self.server.config.active_border_width,
+                .y = border_top + self.server.config.active_border_width,
+                .width = self.server.config.active_border_width,
+                .height = box.height,
+            },
+            .{ // bottom
+                .x = border_left,
+                .y = border_top + box.height + self.server.config.active_border_width,
+                .width = box.width + 2 * self.server.config.active_border_width,
+                .height = self.server.config.active_border_width,
+            },
+        };
+        self.damageBorders();
     }
 
     fn damageBorders(self: *Surface) void {
@@ -1447,11 +1440,11 @@ const Output = struct {
                     wlr.wlr_renderer_clear(self.wlr_output.renderer, &self.server.config.background_color);
                 }
 
-                if (!Surface.renderFirstFullscreen(self.server.toplevels, &rdata)) {
+                if (self.server.show_toplevels and !Surface.renderFirstFullscreen(self.server.toplevels, &rdata)) {
                     Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], &rdata, false);
                     Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM], &rdata, false);
-                    Surface.renderList(self.server.toplevels, &rdata, false);
-                    Surface.renderList(self.server.unmanaged_toplevels, &rdata, false);
+                    if (self.server.show_toplevels) Surface.renderList(self.server.toplevels, &rdata, false);
+                    if (self.server.show_toplevels) Surface.renderList(self.server.unmanaged_toplevels, &rdata, false);
                     Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_TOP], &rdata, false);
                     Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY], &rdata, false);
                 }
@@ -1741,6 +1734,7 @@ const Server = struct {
         self.drag_icon = null;
         self.grabbed_toplevel = null;
         self.modifier_pressed = false;
+        self.show_toplevels = true;
         wlr.wlr_log_init(wlr.WLR_DEBUG, null);
         self.wl_display = wlr.wl_display_create() orelse
             return error.CannotCreateDisplay;
@@ -2551,6 +2545,11 @@ const Server = struct {
         if (self.outputAtCursor()) |output| output.toggleSpreadView();
     }
 
+    fn actionToggleHideToplevels(self: *Server, _: []const u8) void {
+        self.show_toplevels = !self.show_toplevels;
+        self.damageAllOutputs();
+    }
+
     fn actionQuit(self: *Server, _: []const u8) void {
         wlr.wl_display_terminate(self.wl_display);
     }
@@ -2671,6 +2670,7 @@ const Server = struct {
 
     toplevels: std.TailQueue(*Surface),
     unmanaged_toplevels: std.TailQueue(*Surface),
+    show_toplevels: bool,
 
     wlr_output_layout: *wlr.wlr_output_layout,
     outputs: std.TailQueue(*Output),
@@ -2738,6 +2738,7 @@ const Config = struct {
         grow_toplevel,
         toggle_fullscreen,
         toggle_spread_view,
+        toggle_hide_toplevels,
         switch_to_workspace,
         toplevel_to_workspace,
         quit,
@@ -2948,6 +2949,7 @@ const Config = struct {
                     .switch_to_workspace => Server.actionSwitchToWorkspace,
                     .toplevel_to_workspace => Server.actionToplevelToWorkspace,
                     .toggle_spread_view => Server.actionToggleSpreadView,
+                    .toggle_hide_toplevels => Server.actionToggleHideToplevels,
                     .quit => Server.actionQuit,
                     .chvt => Server.actionChvt,
                     .reload_config => Server.actionReloadConfig,

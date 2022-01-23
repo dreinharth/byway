@@ -17,6 +17,12 @@
     "hotkeys": [
         {
             "modifiers": ["logo"],
+            "key": "d",
+            "action": "toggle_hide_toplevels",
+            "arg": ""
+        },
+        {
+            "modifiers": ["logo"],
             "key": "Escape",
             "action": "toggle_spread_view",
             "arg": ""

@@ -71,7 +71,8 @@ Hotkey Actions:
 | `"move_toplevel"` | Moves the toplevel view with keyboard focus in the specified direction | One of `"up"`, `"down"`, `"left"`, `"right"` |
 | `"grow_toplevel"` | Grows or shrinks the toplevel view with keyboard focus by moving the bottom or rightmost edge | `"up"`, `"down"`, `"left"`, `"right"` |
 | `"toggle_fullscreen"` | Toggles fullscreen for the toplevel view with keyboard focus | `""` |
-| `"toggle_spread_view"` | Toggles mode to display all toplevels in a grid for selection | `""` |
+| `"toggle_spread_view"` | Toggles mode to display all toplevel views in a grid for selection | `""` |
+| `"toggle_hide_toplevels"` | Toggles hiding all toplevel views | `""` |
 | `"switch_to_workspace"` | Changes the currently visible workspace | character corresponding to workspace number, `"0"` to `"9"` |
 | `"toplevel_to_workspace"` | Moves the toplevel view with keyboard focus to the specified workspace | character corresponding to workspace number, `"0"` to `"9"` |
 | `"quit"` | Quits byway | `""` |
