@@ -504,10 +504,6 @@ const Surface = struct {
         }
         box.x += self.output_box.x;
         box.y += self.output_box.y;
-        if (self.wlr_surface) |wlr_surface| {
-            box.x += wlr_surface.sx;
-            box.y += wlr_surface.sy;
-        }
     }
 
     fn isXdgPopup(wlr_surface: *wlr.wlr_surface) bool {
