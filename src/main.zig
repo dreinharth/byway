@@ -456,6 +456,10 @@ const Surface = struct {
 
         switch (self.typed_surface) {
             .xdg => |xdg| {
+                var xdg_box: wlr.wlr_box = undefined;
+                wlr.wlr_xdg_surface_get_geometry(xdg, &xdg_box);
+                self.output_box.x -= xdg_box.x;
+                self.output_box.y -= xdg_box.y;
                 self.pending_serial = wlr.wlr_xdg_toplevel_set_size(
                     xdg,
                     @intCast(u32, box.width),
