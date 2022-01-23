@@ -1436,7 +1436,7 @@ const Output = struct {
                     wlr.wlr_renderer_clear(self.wlr_output.renderer, &self.server.config.background_color);
                 }
 
-                if (self.server.show_toplevels and !Surface.renderFirstFullscreen(self.server.toplevels, &rdata)) {
+                if (!Surface.renderFirstFullscreen(self.server.toplevels, &rdata)) {
                     Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND], &rdata, false);
                     Surface.renderList(self.layers[wlr.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM], &rdata, false);
                     if (self.server.show_toplevels) Surface.renderList(self.server.toplevels, &rdata, false);
@@ -1594,6 +1594,7 @@ const Output = struct {
         for (LAYERS_TOP_TO_BOTTOM) |layer| {
             self.arrangeLayer(self.layers[layer], &updated_usable_box, false);
         }
+        self.damageAll();
     }
 
     fn layerSurfaceAt(
