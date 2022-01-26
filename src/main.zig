@@ -916,6 +916,12 @@ const Surface = struct {
             }
         }
 
+        if (parent_box.width == 0) {
+            if (self.server.outputs.first) |node| {
+                node.data.getBox(&parent_box);
+            }
+        }
+
         box.x = parent_box.x + @divFloor(parent_box.width, 2) - @divFloor(box.width, 2);
         box.y = parent_box.y + @divFloor(parent_box.height, 2) - @divFloor(box.height, 2);
         self.setGeometry(box);
@@ -960,7 +966,7 @@ const Surface = struct {
     fn renderFirstFullscreen(surfaces: std.TailQueue(*Surface), rdata: *RenderData) bool {
         var iter = surfaces.last;
         return while (iter) |node| : (iter = node.prev) {
-            if (node.data.is_actual_fullscreen and node.data.isVisibleOn(rdata.output)) {
+            if (node.data.is_actual_fullscreen and node.data.isVisibleOn(rdata.output, false)) {
                 node.data.triggerRender(rdata, false);
                 break true;
             }
@@ -976,21 +982,21 @@ const Surface = struct {
         var iter = surfaces.last;
         rdata.spread.index = 0;
         while (iter) |node| : (iter = node.prev) {
-            if (!node.data.isVisibleOn(rdata.output)) continue;
+            if (!node.data.isVisibleOn(rdata.output, false)) continue;
             node.data.triggerRender(rdata, popups);
             if (rdata.output.spread_view) rdata.spread.index += 1;
         }
     }
 
-    fn isVisible(self: *Surface) bool {
+    fn isVisible(self: *Surface, any_workspace: bool) bool {
         var iter = self.server.outputs.first;
         return while (iter) |node| : (iter = node.next) {
-            if (self.isVisibleOn(node.data)) break true;
+            if (self.isVisibleOn(node.data, any_workspace)) break true;
         } else false;
     }
 
-    fn isVisibleOn(self: *Surface, output: *Output) bool {
-        if (self.workspace != 0 and self.workspace != output.active_workspace) return false;
+    fn isVisibleOn(self: *Surface, output: *Output, any_workspace: bool) bool {
+        if (!any_workspace and self.workspace != 0 and self.workspace != output.active_workspace) return false;
         var box: wlr.wlr_box = undefined;
         self.getGeometry(&box);
         return wlr.wlr_output_layout_intersects(
@@ -1296,7 +1302,7 @@ const SpreadParams = struct {
         var visible_count: f32 = 0;
         var iter = surfaces.last;
         while (iter) |node| : (iter = node.prev) {
-            if (node.data.isVisibleOn(output)) visible_count += 1;
+            if (node.data.isVisibleOn(output, false)) visible_count += 1;
         }
         if (visible_count == 0) return;
         self.layout = output.getLayout();
@@ -1468,8 +1474,6 @@ const Output = struct {
         wlr.wl_list_remove(&self.destroy.link);
         self.server.outputs.remove(&self.node);
         wlr.wlr_output_layout_remove(self.server.wlr_output_layout, self.wlr_output);
-
-        // TODO: move toplevels to remaining output
         alloc.destroy(self);
     }
 
@@ -1485,6 +1489,7 @@ const Output = struct {
         head.state.x = self.total_box.x;
         head.state.y = self.total_box.y;
         self.arrangeLayers();
+        self.server.ensureToplevelsVisible();
     }
 
     fn arrangeLayer(
@@ -2556,6 +2561,12 @@ const Server = struct {
         _ = wlr.wlr_session_change_vt(wlr.wlr_backend_get_session(self.wlr_backend), vt);
     }
 
+    fn ensureToplevelsVisible(self: *Server) void {
+        var iter = self.toplevels.last;
+        while (iter) |node| : (iter = node.prev) {
+            if (!node.data.isVisible(true)) node.data.place();
+        }
+    }
     fn nextIterCirc(list: std.TailQueue(*Surface), node: *std.TailQueue(*Surface).Node, forward: bool) ?*std.TailQueue(*Surface).Node {
         var iter = if (forward) node.next else node.prev;
 
@@ -2577,7 +2588,7 @@ const Server = struct {
                     break;
                 }
 
-                if (!node.data.isVisible()) continue;
+                if (!node.data.isVisible(false)) continue;
 
                 if (std.mem.eql(
                     u8,
