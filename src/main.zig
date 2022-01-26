@@ -960,7 +960,7 @@ const Surface = struct {
     fn renderFirstFullscreen(surfaces: std.TailQueue(*Surface), rdata: *RenderData) bool {
         var iter = surfaces.last;
         return while (iter) |node| : (iter = node.prev) {
-            if (node.data.is_actual_fullscreen) {
+            if (node.data.is_actual_fullscreen and node.data.isVisibleOn(rdata.output)) {
                 node.data.triggerRender(rdata, false);
                 break true;
             }
