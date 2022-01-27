@@ -32,6 +32,7 @@ const wlr = @cImport({
     @cInclude("wlr/types/wlr_seat.h");
     @cInclude("wlr/types/wlr_server_decoration.h");
     @cInclude("wlr/types/wlr_screencopy_v1.h");
+    @cInclude("wlr/types/wlr_subcompositor.h");
     @cInclude("wlr/types/wlr_viewporter.h");
     @cInclude("wlr/types/wlr_xcursor_manager.h");
     @cInclude("wlr/types/wlr_xdg_shell.h");
@@ -1751,7 +1752,7 @@ const Server = struct {
             self.wlr_renderer,
         ) orelse
             return error.CannotCreateCompositor;
-
+        _ = wlr.wlr_subcompositor_create(self.wl_display);
         _ = wlr.wlr_data_device_manager_create(self.wl_display);
         _ = wlr.wlr_primary_selection_v1_device_manager_create(self.wl_display);
         _ = wlr.wlr_export_dmabuf_manager_v1_create(self.wl_display);

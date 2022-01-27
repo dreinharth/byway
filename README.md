@@ -28,7 +28,7 @@ zig build install -Drelease-safe -p ~/.local
 ### Dependencies
 
 - zig (0.10)
-- wlroots (0.15)
+- wlroots (0.16)
 - wayland
 - wayland-protocols
 - xkbcommon
