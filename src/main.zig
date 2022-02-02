@@ -1509,38 +1509,38 @@ const Output = struct {
                 continue;
             }
 
-            var new_x: i32 = undefined;
-            var new_y: i32 = undefined;
+            var new_x: u32 = undefined;
+            var new_y: u32 = undefined;
             var new_width = @intCast(i32, state.desired_width);
             var new_height = @intCast(i32, state.desired_height);
             var bounds: wlr.wlr_box = if (state.exclusive_zone == -1) self.total_box else usable_area.*;
 
             // Horizontal axis
             if (((state.anchor & both_horiz) != 0) and new_width == 0) {
-                new_x = bounds.x;
+                new_x = @intCast(u32, bounds.x);
                 new_width = bounds.width;
             } else if ((state.anchor & LAYER_ANCHOR_LEFT) != 0) {
-                new_x = bounds.x;
+                new_x = @intCast(u32, bounds.x);
             } else if ((state.anchor & LAYER_ANCHOR_RIGHT) != 0) {
-                new_x = bounds.x + bounds.width - new_width;
+                new_x = @intCast(u32, bounds.x + bounds.width - new_width);
             } else {
-                new_x = bounds.x + @divFloor(bounds.width, 2) - @divFloor(new_width, 2);
+                new_x = @intCast(u32, bounds.x + @divFloor(bounds.width, 2) - @divFloor(new_width, 2));
             }
             // Vertical axis
             if (((state.anchor & both_vert) != 0) and new_height == 0) {
-                new_y = bounds.y;
+                new_y = @intCast(u32, bounds.y);
                 new_height = bounds.height;
             } else if ((state.anchor & LAYER_ANCHOR_TOP) != 0) {
-                new_y = bounds.y;
+                new_y = @intCast(u32, bounds.y);
             } else if ((state.anchor & LAYER_ANCHOR_BOTTOM) != 0) {
-                new_y = bounds.y + bounds.height - new_height;
+                new_y = @intCast(u32, bounds.y + bounds.height - new_height);
             } else {
-                new_y = bounds.y + @divFloor(bounds.height, 2) - @divFloor(new_height, 2);
+                new_y = @intCast(u32, bounds.y + @divFloor(bounds.height, 2) - @divFloor(new_height, 2));
             }
             // Margin
             if ((state.anchor & both_horiz) == both_horiz) {
                 new_x += state.margin.left;
-                new_width -= state.margin.left + state.margin.right;
+                new_width -= @intCast(i32, state.margin.left + state.margin.right);
             } else if ((state.anchor & LAYER_ANCHOR_LEFT) != 0) {
                 new_x += state.margin.left;
             } else if ((state.anchor & LAYER_ANCHOR_RIGHT) != 0) {
@@ -1548,7 +1548,7 @@ const Output = struct {
             }
             if ((state.anchor & both_vert) == both_vert) {
                 new_y += state.margin.top;
-                new_height -= state.margin.top + state.margin.bottom;
+                new_height -= @intCast(i32, state.margin.top + state.margin.bottom);
             } else if ((state.anchor & LAYER_ANCHOR_TOP) != 0) {
                 new_y += state.margin.top;
             } else if ((state.anchor & LAYER_ANCHOR_BOTTOM) != 0) {
@@ -1571,10 +1571,10 @@ const Output = struct {
                     usable_area,
                     state.anchor,
                     state.exclusive_zone,
-                    state.margin.top,
-                    state.margin.right,
-                    state.margin.bottom,
-                    state.margin.left,
+                    @intCast(i32, state.margin.top),
+                    @intCast(i32, state.margin.right),
+                    @intCast(i32, state.margin.bottom),
+                    @intCast(i32, state.margin.left),
                 );
             _ = wlr.wlr_layer_surface_v1_configure(
                 surface.typed_surface.layer,
