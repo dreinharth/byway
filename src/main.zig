@@ -33,6 +33,8 @@ const wlr = @cImport({
     @cInclude("wlr/types/wlr_server_decoration.h");
     @cInclude("wlr/types/wlr_screencopy_v1.h");
     @cInclude("wlr/types/wlr_viewporter.h");
+    @cInclude("wlr/types/wlr_virtual_keyboard_v1.h");
+    @cInclude("wlr/types/wlr_virtual_pointer_v1.h");
     @cInclude("wlr/types/wlr_xcursor_manager.h");
     @cInclude("wlr/types/wlr_xdg_shell.h");
     @cInclude("wlr/types/wlr_xdg_decoration_v1.h");
@@ -267,6 +269,10 @@ const Surface = struct {
 
         if (self.list) |list| {
             list.remove(&self.node);
+        }
+        if (self.server.grabbed_toplevel == self) {
+            self.server.cursor_mode = .passthrough;
+            self.server.grabbed_toplevel = null;
         }
         self.server.processCursorMotion(0);
     }
@@ -1843,6 +1849,22 @@ const Server = struct {
             Server.onNewInputDevice,
             &self.wlr_backend.events.new_input,
         );
+        self.wlr_virtual_keyboard_mgr = wlr.wlr_virtual_keyboard_manager_v1_create(self.wl_display);
+        Signal.connect(
+            *wlr.wlr_virtual_keyboard_v1,
+            self,
+            "virtual_keyboard",
+            Server.onNewVirtualKeyboard,
+            &self.wlr_virtual_keyboard_mgr.events.new_virtual_keyboard,
+        );
+        self.wlr_virtual_pointer_mgr = wlr.wlr_virtual_pointer_manager_v1_create(self.wl_display);
+        Signal.connect(
+            *wlr.wlr_virtual_pointer_v1_new_pointer_event,
+            self,
+            "virtual_pointer",
+            Server.onNewVirtualPointer,
+            &self.wlr_virtual_pointer_mgr.events.new_virtual_pointer,
+        );
         self.seat = wlr.wlr_seat_create(self.wl_display, "seat0");
         Signal.connect(
             *wlr.wlr_seat_pointer_request_set_cursor_event,
@@ -2032,8 +2054,7 @@ const Server = struct {
                 handled = true;
                 self.grabbed_toplevel = null;
             }
-        } else {
-            const keyboard = wlr.wlr_seat_get_keyboard(self.seat);
+        } else if (wlr.wlr_seat_get_keyboard(self.seat)) |keyboard| {
             const modifiers = wlr.wlr_keyboard_get_modifiers(keyboard);
             if (modifiers == self.config.mouse_move_modifiers and
                 event.button == self.config.mouse_move_button)
@@ -2095,14 +2116,15 @@ const Server = struct {
             }
 
             if (next_surface.setActivated(true)) {
-                const wlr_keyboard: *wlr.wlr_keyboard = wlr.wlr_seat_get_keyboard(self.seat);
-                wlr.wlr_seat_keyboard_notify_enter(
-                    self.seat,
-                    wlr_surface,
-                    &wlr_keyboard.keycodes,
-                    wlr_keyboard.num_keycodes,
-                    &wlr_keyboard.modifiers,
-                );
+                if (@ptrCast(?*wlr.wlr_keyboard, wlr.wlr_seat_get_keyboard(self.seat))) |wlr_keyboard| {
+                    wlr.wlr_seat_keyboard_notify_enter(
+                        self.seat,
+                        wlr_surface,
+                        &wlr_keyboard.keycodes,
+                        wlr_keyboard.num_keycodes,
+                        &wlr_keyboard.modifiers,
+                    );
+                }
             }
 
             next_surface.damageBorders();
@@ -2141,13 +2163,37 @@ const Server = struct {
         wlr.wlr_seat_set_capabilities(self.seat, capabilities);
     }
 
-    fn onRequestSetCursor(self: *Server, event: *wlr.wlr_seat_pointer_request_set_cursor_event) !void {
+    fn onNewVirtualKeyboard(self: *Server, event: *wlr.wlr_virtual_keyboard_v1) !void {
+        try self.onNewInputDevice(&event.input_device);
+    }
+
+    fn onNewVirtualPointer(
+        self: *Server,
+        event: *wlr.wlr_virtual_pointer_v1_new_pointer_event,
+    ) !void {
+        try self.onNewInputDevice(
+            &@ptrCast(*wlr.wlr_virtual_pointer_v1, event.new_pointer).input_device,
+        );
+    }
+
+    fn onRequestSetCursor(
+        self: *Server,
+        event: *wlr.wlr_seat_pointer_request_set_cursor_event,
+    ) !void {
         if (self.seat.pointer_state.focused_client == event.seat_client) {
-            wlr.wlr_cursor_set_surface(self.cursor, event.surface, event.hotspot_x, event.hotspot_y);
+            wlr.wlr_cursor_set_surface(
+                self.cursor,
+                event.surface,
+                event.hotspot_x,
+                event.hotspot_y,
+            );
         }
     }
 
-    fn onRequestSetSelection(self: *Server, event: *wlr.wlr_seat_request_set_selection_event) !void {
+    fn onRequestSetSelection(
+        self: *Server,
+        event: *wlr.wlr_seat_request_set_selection_event,
+    ) !void {
         wlr.wlr_seat_set_selection(self.seat, event.source, event.serial);
     }
 
@@ -2567,7 +2613,11 @@ const Server = struct {
             if (!node.data.isVisible(true)) node.data.place();
         }
     }
-    fn nextIterCirc(list: std.TailQueue(*Surface), node: *std.TailQueue(*Surface).Node, forward: bool) ?*std.TailQueue(*Surface).Node {
+    fn nextIterCirc(
+        list: std.TailQueue(*Surface),
+        node: *std.TailQueue(*Surface).Node,
+        forward: bool,
+    ) ?*std.TailQueue(*Surface).Node {
         var iter = if (forward) node.next else node.prev;
 
         if (iter) |i| return i;
@@ -2712,6 +2762,10 @@ const Server = struct {
     drag_icon: ?*Surface,
 
     keyboards: std.TailQueue(*Keyboard),
+    wlr_virtual_keyboard_mgr: *wlr.wlr_virtual_keyboard_manager_v1,
+    virtual_keyboard: wlr.wl_listener,
+    wlr_virtual_pointer_mgr: *wlr.wlr_virtual_pointer_manager_v1,
+    virtual_pointer: wlr.wl_listener,
     cursor_mode: CursorMode,
     grabbed_toplevel: ?*Surface,
     grab_geobox: wlr.wlr_box,

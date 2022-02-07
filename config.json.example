@@ -6,7 +6,7 @@
     "focused_color": [0.28, 0.78, 1.0, 1.0],
     "grabbed_color": [1.0, 0.6, 0.7, 1.0],
     "active_border_width": 3,
-    "autostart": ["kanshi", "waybar"],
+    "autostart": ["kanshi", "waybar", "swayidle -w timeout 600 'swaylock -c 000000'"],
     "move_pixels": 20,
     "grow_pixels": 10,
     "damage_tracking": "partial",
