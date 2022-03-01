@@ -358,7 +358,10 @@ const Surface = struct {
 
         switch (self.typed_surface) {
             .xdg => |xdg| {
-                _ = wlr.wlr_xdg_toplevel_set_fullscreen(xdg, self.is_requested_fullscreen);
+                _ = wlr.wlr_xdg_toplevel_set_fullscreen(
+                    @ptrCast(*wlr.wlr_xdg_toplevel, @field(xdg, wlr_xdg_surface_union).toplevel),
+                    self.is_requested_fullscreen,
+                );
             },
             .xwayland => |xwayland| {
                 wlr.wlr_xwayland_surface_set_fullscreen(xwayland, self.is_requested_fullscreen);
@@ -462,7 +465,7 @@ const Surface = struct {
                 self.output_box.x -= xdg_box.x;
                 self.output_box.y -= xdg_box.y;
                 self.pending_serial = wlr.wlr_xdg_toplevel_set_size(
-                    xdg,
+                    @ptrCast(*wlr.wlr_xdg_toplevel, @field(xdg, wlr_xdg_surface_union).toplevel),
                     @intCast(u32, box.width),
                     @intCast(u32, box.height),
                 );
@@ -1129,7 +1132,10 @@ const Surface = struct {
         switch (self.typed_surface) {
             .xdg => |xdg| {
                 if (xdg.role == wlr.WLR_XDG_SURFACE_ROLE_TOPLEVEL) {
-                    _ = wlr.wlr_xdg_toplevel_set_activated(xdg, activated);
+                    _ = wlr.wlr_xdg_toplevel_set_activated(
+                        @ptrCast(*wlr.wlr_xdg_toplevel, @field(xdg, wlr_xdg_surface_union).toplevel),
+                        activated,
+                    );
                     return true;
                 }
             },
@@ -1480,10 +1486,11 @@ const Output = struct {
 
     fn onLayoutChanged(self: *Output, config: *wlr.wlr_output_configuration_v1) void {
         var head: *wlr.wlr_output_configuration_head_v1 = wlr.wlr_output_configuration_head_v1_create(config, self.wlr_output);
-        self.total_box = wlr.wlr_output_layout_get_box(
+        wlr.wlr_output_layout_get_box(
             self.server.wlr_output_layout,
             self.wlr_output,
-        ).*;
+            &self.total_box,
+        );
         self.usable_box = self.total_box;
         head.state.enabled = self.wlr_output.enabled;
         head.state.mode = self.wlr_output.current_mode;
