@@ -71,6 +71,7 @@ Hotkey Actions:
 | `"cycle_toplevels"` | Raises and focuses the next window of the currently-focused application | `"1"` to cycle forward, '"-1" to cycle backward |
 | `"move_toplevel"` | Moves the toplevel view with keyboard focus in the specified direction | One of `"up"`, `"down"`, `"left"`, `"right"` |
 | `"grow_toplevel"` | Grows or shrinks the toplevel view with keyboard focus by moving the bottom or rightmost edge | `"up"`, `"down"`, `"left"`, `"right"` |
+| `"close_toplevel"` | Closes the toplevel view with keyboard focus | `""` |
 | `"toggle_fullscreen"` | Toggles fullscreen for the toplevel view with keyboard focus | `""` |
 | `"toggle_spread_view"` | Toggles mode to display all toplevel views in a grid for selection | `""` |
 | `"toggle_hide_toplevels"` | Toggles hiding all toplevel views | `""` |

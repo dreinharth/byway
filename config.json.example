@@ -16,6 +16,12 @@
     "mouse_grow_button": "left",
     "hotkeys": [
         {
+            "modifiers": ["logo", "shift"],
+            "key": "X",
+            "action": "close_toplevel",
+            "arg": ""
+        },
+        {
             "modifiers": ["logo"],
             "key": "d",
             "action": "toggle_hide_toplevels",

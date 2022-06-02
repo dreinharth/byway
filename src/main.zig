@@ -891,6 +891,18 @@ const Surface = struct {
         }
     }
 
+    fn close(self: *Surface) void {
+        switch (self.typed_surface) {
+            .xdg => |xdg| {
+                wlr.wlr_xdg_toplevel_send_close(xdg);
+            },
+            .xwayland => |xwayland| {
+                wlr.wlr_xwayland_surface_close(xwayland);
+            },
+            else => {}
+        }
+    }
+
     fn place(self: *Surface) void {
         if (self.server.outputAtCursor()) |output| {
             self.workspace = output.active_workspace;
@@ -2702,6 +2714,12 @@ const Server = struct {
         }
     }
 
+    fn actionCloseToplevel(self: *Server, _: []const u8) void {
+        if (self.getFocusedToplevel()) |toplevel| {
+            toplevel.close();
+        }
+    }
+
     fn actionReloadConfig(self: *Server, _: []const u8) void {
         self.config.reload();
     }
@@ -2798,6 +2816,7 @@ const Config = struct {
         cycle_toplevels,
         move_toplevel,
         grow_toplevel,
+        close_toplevel,
         toggle_fullscreen,
         toggle_spread_view,
         toggle_hide_toplevels,
@@ -3008,6 +3027,7 @@ const Config = struct {
                     .move_toplevel => Server.actionMoveKeyboard,
                     .grow_toplevel => Server.actionGrowKeyboard,
                     .toggle_fullscreen => Server.actionToggleFullscreen,
+                    .close_toplevel => Server.actionCloseToplevel,
                     .switch_to_workspace => Server.actionSwitchToWorkspace,
                     .toplevel_to_workspace => Server.actionToplevelToWorkspace,
                     .toggle_spread_view => Server.actionToggleSpreadView,
