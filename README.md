@@ -35,6 +35,7 @@ zig build install -Drelease-safe -p ~/.local
 - xcb
 - libinput
 - pixman
+- xwayland
 
 ## Configuration
 
